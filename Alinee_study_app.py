@@ -1,5 +1,7 @@
+import hashlib
 import json
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -84,22 +86,41 @@ def init_openai() -> OpenAI | None:
 
 
 def request_ai_completion(client: OpenAI, messages: list[dict[str, str]], temperature: float = 0.5) -> str | None:
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=temperature,
-        )
-        return response.choices[0].message.content or ""
-    except RateLimitError:
-        st.error("OpenAI rate limit reached. Please wait a moment and try again.")
-    except APIConnectionError:
-        st.error("OpenAI connection failed. Please check your network and try again.")
-    except APIError as exc:
-        st.error(f"OpenAI API error: {exc}")
-    except Exception as exc:
-        st.error(f"Unexpected AI error: {exc}")
+    for attempt in range(2):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=temperature,
+            )
+            return response.choices[0].message.content or ""
+        except RateLimitError:
+            if attempt == 0:
+                time.sleep(1.5)
+                continue
+            st.error("OpenAI rate limit reached. Please wait a moment and try again.")
+            return None
+        except APIConnectionError:
+            st.error("OpenAI connection failed. Please check your network and try again.")
+            return None
+        except APIError as exc:
+            st.error(f"OpenAI API error: {exc}")
+            return None
+        except Exception as exc:
+            st.error(f"Unexpected AI error: {exc}")
+            return None
     return None
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def verify_password(raw_password: str, stored_password: str) -> bool:
+    if not stored_password:
+        return False
+    # Backward compatible with legacy plain-text passwords.
+    return stored_password == raw_password or stored_password == hash_password(raw_password)
+
 
 def safe_user_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     base = {"password": "", "flashcards": {}, "notes": {}, "scores": {}, "stats": {}}
@@ -113,22 +134,33 @@ def safe_user_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def get_user(db: firestore.Client, username: str) -> dict[str, Any] | None:
-    doc = db.collection("users").document(username).get()
-    if not doc.exists:
+    try:
+        doc = db.collection("users").document(username).get()
+        if not doc.exists:
+            return None
+        return safe_user_payload(doc.to_dict())
+    except Exception as exc:
+        st.error(f"Database read error: {exc}")
         return None
-    return safe_user_payload(doc.to_dict())
 
 
 def create_user(db: firestore.Client, username: str, password: str) -> bool:
-    ref = db.collection("users").document(username)
-    if ref.get().exists:
+    try:
+        ref = db.collection("users").document(username)
+        if ref.get().exists:
+            return False
+        ref.set(safe_user_payload({"password": hash_password(password)}))
+        return True
+    except Exception as exc:
+        st.error(f"Database write error: {exc}")
         return False
-    ref.set(safe_user_payload({"password": password}))
-    return True
 
 
 def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> None:
-    db.collection("users").document(username).set(data, merge=True)
+    try:
+        db.collection("users").document(username).set(data, merge=True)
+    except Exception as exc:
+        st.error(f"Database update error: {exc}")
 
 
 def parse_ai_flashcards(raw_text: str) -> list[dict[str, str]]:
@@ -184,7 +216,7 @@ def login_signup(db: firestore.Client) -> None:
     else:
         if st.button("Login", use_container_width=True):
             user = get_user(db, username.strip())
-            if user and user.get("password") == password:
+            if user and verify_password(password, user.get("password", "")):
                 st.session_state.logged_in = True
                 st.session_state.username = username.strip()
                 st.rerun()

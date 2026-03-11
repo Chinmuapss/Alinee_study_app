@@ -239,6 +239,11 @@ def login_signup(db: firestore.Client) -> None:
         if st.button("Login", use_container_width=True):
             user = get_user(db, username.strip())
             if user and verify_password(password, user.get("password", "")):
+                st.session_state.logged_in = True
+                st.session_state.username = username.strip()
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
             if user and user.get("password") == password:
                 st.session_state.logged_in = True
                 st.session_state.username = username.strip()

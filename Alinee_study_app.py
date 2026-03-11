@@ -2,6 +2,8 @@ import hashlib
 import json
 import re
 import time
+import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,6 +11,7 @@ import firebase_admin
 import streamlit as st
 from firebase_admin import credentials, firestore
 from openai import APIConnectionError, APIError, OpenAI, OpenAIError, RateLimitError
+from openai import OpenAI
 
 st.set_page_config(page_title="ALINEE Study Hub", page_icon="📚", layout="wide")
 
@@ -164,6 +167,22 @@ def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> No
         db.collection("users").document(username).set(data, merge=True)
     except Exception as exc:
         st.error(f"Database update error: {exc}")
+    doc = db.collection("users").document(username).get()
+    if not doc.exists:
+        return None
+    return safe_user_payload(doc.to_dict())
+
+
+def create_user(db: firestore.Client, username: str, password: str) -> bool:
+    ref = db.collection("users").document(username)
+    if ref.get().exists:
+        return False
+    ref.set(safe_user_payload({"password": password}))
+    return True
+
+
+def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> None:
+    db.collection("users").document(username).set(data, merge=True)
 
 
 def parse_ai_flashcards(raw_text: str) -> list[dict[str, str]]:
@@ -225,6 +244,11 @@ def login_signup(db: firestore.Client) -> None:
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
+            if user and user.get("password") == password:
+                st.session_state.logged_in = True
+                st.session_state.username = username.strip()
+                st.rerun()
+            st.error("Invalid username or password.")
 
 
 def main() -> None:
@@ -287,6 +311,8 @@ def main() -> None:
                     with st.spinner("Generating flashcards..."):
                         content = request_ai_completion(
                             ai_client,
+                        response = ai_client.chat.completions.create(
+                            model="gpt-4o-mini",
                             messages=[
                                 {
                                     "role": "system",
@@ -310,6 +336,17 @@ def main() -> None:
                             st.success(f"Saved {len(cards)} flashcards to {subject}.")
                         else:
                             st.warning("AI response could not be parsed. Please try again.")
+                    content = response.choices[0].message.content or ""
+                    cards = parse_ai_flashcards(content)
+
+                    if cards:
+                        subject_cards.extend(cards)
+                        flashcards[subject] = subject_cards
+                        update_user(db, username, {"flashcards": flashcards})
+                        update_progress_stats(db, username, user, "ai_generations")
+                        st.success(f"Saved {len(cards)} flashcards to {subject}.")
+                    else:
+                        st.warning("AI response could not be parsed. Please try again.")
 
             question = st.text_area("Ask any study question")
             if st.button("Ask AI"):
@@ -319,6 +356,8 @@ def main() -> None:
                     with st.spinner("Thinking..."):
                         answer = request_ai_completion(
                             ai_client,
+                        answer = ai_client.chat.completions.create(
+                            model="gpt-4o-mini",
                             messages=[
                                 {"role": "system", "content": "You are a helpful study tutor."},
                                 {"role": "user", "content": question},
@@ -328,6 +367,8 @@ def main() -> None:
                     if answer is not None:
                         st.success(answer)
                         update_progress_stats(db, username, user, "ai_questions")
+                    st.success(answer.choices[0].message.content)
+                    update_progress_stats(db, username, user, "ai_questions")
 
     elif menu == "Flashcards":
         st.title("📇 Flashcards")

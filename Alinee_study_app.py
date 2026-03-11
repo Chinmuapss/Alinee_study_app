@@ -1,3 +1,7 @@
+import hashlib
+import json
+import re
+import time
 import json
 import re
 from datetime import datetime, timezone
@@ -6,6 +10,7 @@ from typing import Any
 import firebase_admin
 import streamlit as st
 from firebase_admin import credentials, firestore
+from openai import APIConnectionError, APIError, OpenAI, OpenAIError, RateLimitError
 from openai import OpenAI
 
 st.set_page_config(page_title="ALINEE Study Hub", page_icon="📚", layout="wide")
@@ -81,6 +86,48 @@ def init_openai() -> OpenAI | None:
     return OpenAI(api_key=api_key)
 
 
+
+
+def request_ai_completion(client: OpenAI, messages: list[dict[str, str]], temperature: float = 0.5) -> str | None:
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=temperature,
+            )
+            return response.choices[0].message.content or ""
+        except RateLimitError:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            st.error("OpenAI rate limit reached. Please wait a moment and try again.")
+            return None
+        except APIConnectionError:
+            st.error("OpenAI connection failed. Please check your network and try again.")
+            return None
+        except APIError as exc:
+            st.error(f"OpenAI API error: {exc}")
+            return None
+        except OpenAIError as exc:
+            st.error(f"OpenAI error: {exc}")
+            return None
+        except Exception as exc:
+            st.error(f"Unexpected AI error: {exc}")
+            return None
+    return None
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def verify_password(raw_password: str, stored_password: str) -> bool:
+    if not stored_password:
+        return False
+    # Backward compatible with legacy plain-text passwords.
+    return stored_password == raw_password or stored_password == hash_password(raw_password)
+
+
 def safe_user_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     base = {"password": "", "flashcards": {}, "notes": {}, "scores": {}, "stats": {}}
     if not payload:
@@ -93,6 +140,33 @@ def safe_user_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def get_user(db: firestore.Client, username: str) -> dict[str, Any] | None:
+    try:
+        doc = db.collection("users").document(username).get()
+        if not doc.exists:
+            return None
+        return safe_user_payload(doc.to_dict())
+    except Exception as exc:
+        st.error(f"Database read error: {exc}")
+        return None
+
+
+def create_user(db: firestore.Client, username: str, password: str) -> bool:
+    try:
+        ref = db.collection("users").document(username)
+        if ref.get().exists:
+            return False
+        ref.set(safe_user_payload({"password": hash_password(password)}))
+        return True
+    except Exception as exc:
+        st.error(f"Database write error: {exc}")
+        return False
+
+
+def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> None:
+    try:
+        db.collection("users").document(username).set(data, merge=True)
+    except Exception as exc:
+        st.error(f"Database update error: {exc}")
     doc = db.collection("users").document(username).get()
     if not doc.exists:
         return None
@@ -164,6 +238,7 @@ def login_signup(db: firestore.Client) -> None:
     else:
         if st.button("Login", use_container_width=True):
             user = get_user(db, username.strip())
+            if user and verify_password(password, user.get("password", "")):
             if user and user.get("password") == password:
                 st.session_state.logged_in = True
                 st.session_state.username = username.strip()
@@ -229,6 +304,8 @@ def main() -> None:
                     st.error("Please enter a topic.")
                 else:
                     with st.spinner("Generating flashcards..."):
+                        content = request_ai_completion(
+                            ai_client,
                         response = ai_client.chat.completions.create(
                             model="gpt-4o-mini",
                             messages=[
@@ -243,6 +320,17 @@ def main() -> None:
                             ],
                             temperature=0.4,
                         )
+
+                    if content is not None:
+                        cards = parse_ai_flashcards(content)
+                        if cards:
+                            subject_cards.extend(cards)
+                            flashcards[subject] = subject_cards
+                            update_user(db, username, {"flashcards": flashcards})
+                            update_progress_stats(db, username, user, "ai_generations")
+                            st.success(f"Saved {len(cards)} flashcards to {subject}.")
+                        else:
+                            st.warning("AI response could not be parsed. Please try again.")
                     content = response.choices[0].message.content or ""
                     cards = parse_ai_flashcards(content)
 
@@ -261,6 +349,8 @@ def main() -> None:
                     st.error("Please enter a question.")
                 else:
                     with st.spinner("Thinking..."):
+                        answer = request_ai_completion(
+                            ai_client,
                         answer = ai_client.chat.completions.create(
                             model="gpt-4o-mini",
                             messages=[
@@ -269,6 +359,9 @@ def main() -> None:
                             ],
                             temperature=0.5,
                         )
+                    if answer is not None:
+                        st.success(answer)
+                        update_progress_stats(db, username, user, "ai_questions")
                     st.success(answer.choices[0].message.content)
                     update_progress_stats(db, username, user, "ai_questions")
 

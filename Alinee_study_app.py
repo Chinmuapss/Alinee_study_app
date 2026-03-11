@@ -2,6 +2,8 @@ import hashlib
 import json
 import re
 import time
+import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,6 +11,7 @@ import firebase_admin
 import streamlit as st
 from firebase_admin import credentials, firestore
 from openai import APIConnectionError, APIError, OpenAI, OpenAIError, RateLimitError
+from openai import OpenAI
 
 st.set_page_config(page_title="ALINEE Study Hub", page_icon="📚", layout="wide")
 
@@ -164,6 +167,22 @@ def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> No
         db.collection("users").document(username).set(data, merge=True)
     except Exception as exc:
         st.error(f"Database update error: {exc}")
+    doc = db.collection("users").document(username).get()
+    if not doc.exists:
+        return None
+    return safe_user_payload(doc.to_dict())
+
+
+def create_user(db: firestore.Client, username: str, password: str) -> bool:
+    ref = db.collection("users").document(username)
+    if ref.get().exists:
+        return False
+    ref.set(safe_user_payload({"password": password}))
+    return True
+
+
+def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> None:
+    db.collection("users").document(username).set(data, merge=True)
 
 
 def parse_ai_flashcards(raw_text: str) -> list[dict[str, str]]:
@@ -225,77 +244,12 @@ def login_signup(db: firestore.Client) -> None:
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
+            if user and user.get("password") == password:
+                st.session_state.logged_in = True
+                st.session_state.username = username.strip()
+                st.rerun()
+            st.error("Invalid username or password.")
 
-
-
-
-def render_ai_assistant(
-    db: firestore.Client,
-    ai_client: OpenAI | None,
-    username: str,
-    user: dict[str, Any],
-    subject: str,
-    flashcards: dict[str, list[dict[str, str]]],
-) -> None:
-    st.title("🤖 AI Study Assistant")
-    st.caption("Ask questions and generate custom flashcards from your requested topic.")
-
-    if not ai_client:
-        st.warning("AI features are disabled until OPENAI_API_KEY is configured.")
-        return
-
-    subject_cards = flashcards.get(subject, [])
-    topic = st.text_input("Topic for flashcard generation", placeholder="e.g. Cell Biology")
-    count = st.slider("Number of flashcards", min_value=1, max_value=12, value=5)
-
-    if st.button("Generate AI Flashcards"):
-        if not topic.strip():
-            st.error("Please enter a topic.")
-        else:
-            with st.spinner("Generating flashcards..."):
-                content = request_ai_completion(
-                    ai_client,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "Return concise study flashcards as JSON list with keys question and answer.",
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Create {count} flashcards about {topic} for students.",
-                        },
-                    ],
-                    temperature=0.4,
-                )
-
-            if content is not None:
-                cards = parse_ai_flashcards(content)
-                if cards:
-                    subject_cards.extend(cards)
-                    flashcards[subject] = subject_cards
-                    update_user(db, username, {"flashcards": flashcards})
-                    update_progress_stats(db, username, user, "ai_generations")
-                    st.success(f"Saved {len(cards)} flashcards to {subject}.")
-                else:
-                    st.warning("AI response could not be parsed. Please try again.")
-
-    question = st.text_area("Ask any study question")
-    if st.button("Ask AI"):
-        if not question.strip():
-            st.error("Please enter a question.")
-        else:
-            with st.spinner("Thinking..."):
-                answer = request_ai_completion(
-                    ai_client,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful study tutor."},
-                        {"role": "user", "content": question},
-                    ],
-                    temperature=0.5,
-                )
-            if answer is not None:
-                st.success(answer)
-                update_progress_stats(db, username, user, "ai_questions")
 
 def main() -> None:
     init_state()
@@ -341,7 +295,80 @@ def main() -> None:
         st.info("Use the sidebar to study, ask AI, generate flashcards, take quizzes, and track progress.")
 
     elif menu == "AI Assistant":
-        render_ai_assistant(db, ai_client, username, user, subject, flashcards)
+        st.title("🤖 AI Study Assistant")
+        st.caption("Ask questions and generate custom flashcards from your requested topic.")
+
+        if not ai_client:
+            st.warning("AI features are disabled until OPENAI_API_KEY is configured.")
+        else:
+            topic = st.text_input("Topic for flashcard generation", placeholder="e.g. Cell Biology")
+            count = st.slider("Number of flashcards", min_value=1, max_value=12, value=5)
+
+            if st.button("Generate AI Flashcards"):
+                if not topic.strip():
+                    st.error("Please enter a topic.")
+                else:
+                    with st.spinner("Generating flashcards..."):
+                        content = request_ai_completion(
+                            ai_client,
+                        response = ai_client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": "Return concise study flashcards as JSON list with keys question and answer.",
+                                },
+                                {
+                                    "role": "user",
+                                    "content": f"Create {count} flashcards about {topic} for students.",
+                                },
+                            ],
+                            temperature=0.4,
+                        )
+
+                    if content is not None:
+                        cards = parse_ai_flashcards(content)
+                        if cards:
+                            subject_cards.extend(cards)
+                            flashcards[subject] = subject_cards
+                            update_user(db, username, {"flashcards": flashcards})
+                            update_progress_stats(db, username, user, "ai_generations")
+                            st.success(f"Saved {len(cards)} flashcards to {subject}.")
+                        else:
+                            st.warning("AI response could not be parsed. Please try again.")
+                    content = response.choices[0].message.content or ""
+                    cards = parse_ai_flashcards(content)
+
+                    if cards:
+                        subject_cards.extend(cards)
+                        flashcards[subject] = subject_cards
+                        update_user(db, username, {"flashcards": flashcards})
+                        update_progress_stats(db, username, user, "ai_generations")
+                        st.success(f"Saved {len(cards)} flashcards to {subject}.")
+                    else:
+                        st.warning("AI response could not be parsed. Please try again.")
+
+            question = st.text_area("Ask any study question")
+            if st.button("Ask AI"):
+                if not question.strip():
+                    st.error("Please enter a question.")
+                else:
+                    with st.spinner("Thinking..."):
+                        answer = request_ai_completion(
+                            ai_client,
+                        answer = ai_client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[
+                                {"role": "system", "content": "You are a helpful study tutor."},
+                                {"role": "user", "content": question},
+                            ],
+                            temperature=0.5,
+                        )
+                    if answer is not None:
+                        st.success(answer)
+                        update_progress_stats(db, username, user, "ai_questions")
+                    st.success(answer.choices[0].message.content)
+                    update_progress_stats(db, username, user, "ai_questions")
 
     elif menu == "Flashcards":
         st.title("📇 Flashcards")

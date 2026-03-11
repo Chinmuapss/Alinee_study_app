@@ -8,7 +8,7 @@ from typing import Any
 import firebase_admin
 import streamlit as st
 from firebase_admin import credentials, firestore
-from openai import APIConnectionError, APIError, OpenAI, RateLimitError
+from openai import APIConnectionError, APIError, OpenAI, OpenAIError, RateLimitError
 
 st.set_page_config(page_title="ALINEE Study Hub", page_icon="📚", layout="wide")
 
@@ -86,7 +86,7 @@ def init_openai() -> OpenAI | None:
 
 
 def request_ai_completion(client: OpenAI, messages: list[dict[str, str]], temperature: float = 0.5) -> str | None:
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -95,8 +95,8 @@ def request_ai_completion(client: OpenAI, messages: list[dict[str, str]], temper
             )
             return response.choices[0].message.content or ""
         except RateLimitError:
-            if attempt == 0:
-                time.sleep(1.5)
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
                 continue
             st.error("OpenAI rate limit reached. Please wait a moment and try again.")
             return None
@@ -105,6 +105,9 @@ def request_ai_completion(client: OpenAI, messages: list[dict[str, str]], temper
             return None
         except APIError as exc:
             st.error(f"OpenAI API error: {exc}")
+            return None
+        except OpenAIError as exc:
+            st.error(f"OpenAI error: {exc}")
             return None
         except Exception as exc:
             st.error(f"Unexpected AI error: {exc}")

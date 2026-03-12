@@ -1,392 +1,206 @@
 import streamlit as st
-import firebase_admin
-import hashlib
-import json
-from datetime import datetime
-from firebase_admin import credentials, firestore
-from openai import OpenAI
+import random
 
-st.set_page_config(page_title="ALINEE Study Hub", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Offline AI Study App", page_icon="📚")
 
-SUBJECTS = ["Math", "Science", "History", "English", "Geography"]
+# ---------------- SUBJECTS ----------------
+SUBJECTS = [
+    "Math", "Science", "History", "Geography", "English",
+    "Computer Science", "Physics", "Biology", "Chemistry", "General Knowledge"
+]
 
-# ---------------- SESSION ---------------- #
+# ---------------- QUIZ BANK ----------------
+QUIZ_BANK = {
+    "Math": [
+                {"question": "What is 5 + 7?", "options": ["10", "11", "12", "13"], "answer": "12"},
+                {"question": "What is 9 × 8?", "options": ["72", "64", "81", "70"], "answer": "72"},
+                {"question": "Square root of 64?", "options": ["6", "7", "8", "9"], "answer": "8"},
+                {"question": "Solve: 15 - 9", "options": ["6", "7", "5", "8"], "answer": "6"},
+                {"question": "What is 12 ÷ 4?", "options": ["2", "3", "4", "6"], "answer": "3"},
+            ] * 6,
+    "Science": [
+                   {"question": "What planet is known as the Red Planet?",
+                    "options": ["Earth", "Mars", "Venus", "Jupiter"], "answer": "Mars"},
+                   {"question": "What gas do plants absorb from the air?",
+                    "options": ["Oxygen", "Carbon Dioxide", "Nitrogen", "Hydrogen"], "answer": "Carbon Dioxide"},
+                   {"question": "Water chemical formula?", "options": ["H2O", "CO2", "O2", "H2"], "answer": "H2O"},
+                   {"question": "What is the process of plants making food called?",
+                    "options": ["Photosynthesis", "Respiration", "Digestion", "Evaporation"],
+                    "answer": "Photosynthesis"},
+                   {"question": "What is the boiling point of water?", "options": ["90°C", "100°C", "110°C", "120°C"],
+                    "answer": "100°C"},
+               ] * 6,
+    "History": [
+                   {"question": "Who was the first US president?",
+                    "options": ["George Washington", "Abraham Lincoln", "John Adams", "Thomas Jefferson"],
+                    "answer": "George Washington"},
+                   {"question": "In which year did World War II end?", "options": ["1942", "1945", "1939", "1950"],
+                    "answer": "1945"},
+                   {"question": "Who discovered America?", "options": ["Columbus", "Magellan", "Vespucci", "Cook"],
+                    "answer": "Columbus"},
+                   {"question": "Which empire built the Colosseum?", "options": ["Roman", "Greek", "Egyptian", "Mayan"],
+                    "answer": "Roman"},
+                   {"question": "Who was the French Revolution leader?",
+                    "options": ["Robespierre", "Napoleon", "Louis XVI", "Voltaire"], "answer": "Robespierre"},
+               ] * 6,
+    "Geography": [
+                     {"question": "Largest continent?", "options": ["Asia", "Africa", "Europe", "Australia"],
+                      "answer": "Asia"},
+                     {"question": "Largest ocean?", "options": ["Pacific", "Atlantic", "Indian", "Arctic"],
+                      "answer": "Pacific"},
+                     {"question": "Capital of Japan?", "options": ["Tokyo", "Seoul", "Beijing", "Bangkok"],
+                      "answer": "Tokyo"},
+                     {"question": "Which country has the Great Barrier Reef?",
+                      "options": ["Australia", "USA", "Brazil", "South Africa"], "answer": "Australia"},
+                     {"question": "Which river is the longest?",
+                      "options": ["Nile", "Amazon", "Yangtze", "Mississippi"], "answer": "Nile"},
+                 ] * 6,
+    "English": [
+                   {"question": "Synonym of 'rapid'?", "options": ["Slow", "Quick", "Dull", "Late"], "answer": "Quick"},
+                   {"question": "Select the proper noun", "options": ["city", "school", "London", "river"],
+                    "answer": "London"},
+                   {"question": "Choose correct: 'She ___ to school.'", "options": ["go", "goes", "gone", "going"],
+                    "answer": "goes"},
+                   {"question": "Antonym of 'happy'?", "options": ["Sad", "Glad", "Joyful", "Cheerful"],
+                    "answer": "Sad"},
+                   {"question": "Plural of 'child'?", "options": ["Childs", "Children", "Childes", "Childer"],
+                    "answer": "Children"},
+               ] * 6,
+    "Computer Science": [
+                            {"question": "CPU stands for?",
+                             "options": ["Central Processing Unit", "Computer Power Unit", "Control Processing Unit",
+                                         "Central Program Unit"], "answer": "Central Processing Unit"},
+                            {"question": "HTML is used for?",
+                             "options": ["Structure web pages", "Styling web pages", "Programming logic", "Database"],
+                             "answer": "Structure web pages"},
+                            {"question": "Python is a type of?",
+                             "options": ["Programming Language", "Database", "Web Server", "OS"],
+                             "answer": "Programming Language"},
+                            {"question": "RAM is used for?",
+                             "options": ["Temporary storage", "Permanent storage", "Processing", "Networking"],
+                             "answer": "Temporary storage"},
+                            {"question": "Which is not a programming language?",
+                             "options": ["Python", "Java", "HTML", "C++"], "answer": "HTML"},
+                        ] * 6,
+    "Physics": [
+                   {"question": "Unit of force?", "options": ["Newton", "Joule", "Watt", "Pascal"], "answer": "Newton"},
+                   {"question": "Acceleration due to gravity?", "options": ["9.8 m/s²", "10 m/s²", "8 m/s²", "9 m/s"],
+                    "answer": "9.8 m/s²"},
+                   {"question": "Speed of light?", "options": ["3×10^8 m/s", "3×10^6 m/s", "3×10^5 m/s", "3×10^7 m/s"],
+                    "answer": "3×10^8 m/s"},
+                   {"question": "Energy formula?", "options": ["E=mc²", "F=ma", "P=mv", "V=IR"], "answer": "E=mc²"},
+                   {"question": "Unit of pressure?", "options": ["Pascal", "Newton", "Joule", "Watt"],
+                    "answer": "Pascal"},
+               ] * 6,
+    "Biology": [
+                   {"question": "Basic unit of life?", "options": ["Cell", "Atom", "Organ", "Tissue"],
+                    "answer": "Cell"},
+                   {"question": "Human body has how many chromosomes?", "options": ["46", "44", "48", "42"],
+                    "answer": "46"},
+                   {"question": "DNA stands for?",
+                    "options": ["Deoxyribonucleic Acid", "Ribonucleic Acid", "Deoxyribose Acid", "Dioxin Acid"],
+                    "answer": "Deoxyribonucleic Acid"},
+                   {"question": "Which organ pumps blood?", "options": ["Heart", "Lungs", "Liver", "Kidney"],
+                    "answer": "Heart"},
+                   {"question": "Where does photosynthesis occur?",
+                    "options": ["Chloroplast", "Mitochondria", "Nucleus", "Cytoplasm"], "answer": "Chloroplast"},
+               ] * 6,
+    "Chemistry": [
+                     {"question": "H2O is?", "options": ["Water", "Oxygen", "Hydrogen", "Salt"], "answer": "Water"},
+                     {"question": "NaCl is?", "options": ["Salt", "Sugar", "Acid", "Base"], "answer": "Salt"},
+                     {"question": "pH of neutral solution?", "options": ["7", "0", "14", "1"], "answer": "7"},
+                     {"question": "Periodic table has how many elements?", "options": ["118", "100", "120", "115"],
+                      "answer": "118"},
+                     {"question": "Chemical symbol for gold?", "options": ["Au", "Ag", "G", "Go"], "answer": "Au"},
+                 ] * 6,
+    "General Knowledge": [
+                             {"question": "Who wrote 'Hamlet'?",
+                              "options": ["Shakespeare", "Dickens", "Hemingway", "Tolkien"], "answer": "Shakespeare"},
+                             {"question": "Olympics held every?",
+                              "options": ["2 years", "3 years", "4 years", "5 years"], "answer": "4 years"},
+                             {"question": "Who invented the telephone?",
+                              "options": ["Bell", "Edison", "Tesla", "Newton"], "answer": "Bell"},
+                             {"question": "Smallest country?",
+                              "options": ["Vatican City", "Monaco", "Malta", "Liechtenstein"],
+                              "answer": "Vatican City"},
+                             {"question": "Fastest land animal?", "options": ["Cheetah", "Lion", "Tiger", "Leopard"],
+                              "answer": "Cheetah"},
+                         ] * 6,
+}
 
-def init_state():
-    defaults = {
-        "logged_in": False,
-        "username": "",
-    }
+# ---------------- SESSION ----------------
+if "score" not in st.session_state: st.session_state.score = 0
+if "current_subject" not in st.session_state: st.session_state.current_subject = SUBJECTS[0]
+if "question_pool" not in st.session_state:
+    st.session_state.question_pool = random.sample(QUIZ_BANK[SUBJECTS[0]], len(QUIZ_BANK[SUBJECTS[0]]))
 
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+# ---------------- SIDEBAR ----------------
+subject = st.sidebar.selectbox("Subject", SUBJECTS)
+menu = st.sidebar.radio("Menu", ["Dashboard", "AI Assistant", "Quiz"])
 
+# Switch subject → reset question pool
+if subject != st.session_state.current_subject:
+    st.session_state.current_subject = subject
+    st.session_state.question_pool = random.sample(QUIZ_BANK[subject], len(QUIZ_BANK[subject]))
 
-# ---------------- FIREBASE ---------------- #
-
-def init_firebase():
-
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(dict(st.secrets["firebase"]))
-        firebase_admin.initialize_app(cred)
-
-    return firestore.client()
-
-
-# ---------------- OPENAI ---------------- #
-
-def init_openai():
-
-    key = st.secrets.get("OPENAI_API_KEY")
-
-    if not key:
-        return None
-
-    return OpenAI(api_key=key)
+# ---------------- DASHBOARD ----------------
+if menu == "Dashboard":
+    st.title("📊 Dashboard")
+    st.metric("Score", st.session_state.score)
+    st.write("Subjects available:", len(SUBJECTS))
+    st.write("Total quiz questions:", sum(len(v) for v in QUIZ_BANK.values()))
 
 
-def ai_chat(ai, messages):
-
-    res = ai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages
-    )
-
-    return res.choices[0].message.content
-
-
-# ---------------- SECURITY ---------------- #
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-
-def verify_password(raw, stored):
-    return stored == hash_password(raw)
-
-
-# ---------------- DATABASE ---------------- #
-
-def get_user(db, username):
-
-    doc = db.collection("users").document(username).get()
-
-    if doc.exists:
-        return doc.to_dict()
-
-    return None
-
-
-def create_user(db, username, password):
-
-    ref = db.collection("users").document(username)
-
-    if ref.get().exists:
-        return False
-
-    ref.set({
-        "password": hash_password(password),
-        "flashcards": {},
-        "notes": {},
-        "scores": {},
-        "stats": {
-            "study_streak": 0
-        }
-    })
-
-    return True
-
-
-def update_user(db, username, data):
-
-    db.collection("users").document(username).set(data, merge=True)
-
-
-# ---------------- LOGIN ---------------- #
-
-def login_signup(db):
-
-    st.title("📚 ALINEE Study Hub")
-
-    mode = st.radio("Account", ["Login", "Sign Up"])
-
-    username = st.text_input("Username")
-
-    password = st.text_input("Password", type="password")
-
-    if mode == "Sign Up":
-
-        if st.button("Create Account"):
-
-            if create_user(db, username, password):
-
-                st.success("Account created")
-
-            else:
-
-                st.error("Username exists")
-
+# ---------------- OFFLINE AI ASSISTANT ----------------
+def simple_ai_answer(question):
+    q = question.lower()
+    if any(k in q for k in ["math", "+", "-", "×", "÷"]):
+        return "Try solving step by step. Example: 5 + 7 = 12"
+    elif "planet" in q or "mars" in q:
+        return "Mars is the Red Planet. Earth is blue."
+    elif "gas" in q or "plants" in q:
+        return "Plants absorb carbon dioxide for photosynthesis."
+    elif "capital" in q:
+        return "Tokyo is the capital of Japan. Paris is the capital of France."
+    elif "cpu" in q or "computer" in q:
+        return "CPU stands for Central Processing Unit."
+    elif "water boiling" in q or "boiling point" in q:
+        return "Water boils at 100°C at standard pressure."
     else:
-
-        if st.button("Login"):
-
-            user = get_user(db, username)
-
-            if user and verify_password(password, user["password"]):
-
-                st.session_state.logged_in = True
-                st.session_state.username = username
-
-                st.rerun()
-
-            else:
-
-                st.error("Invalid login")
+        return "I don't know the exact answer, but keep studying!"
 
 
-# ---------------- AI FLASHCARDS ---------------- #
+if menu == "AI Assistant":
+    st.title("🤖 Offline AI Study Assistant")
+    question = st.text_area("Ask a study question")
+    if st.button("Ask AI"):
+        if not question.strip():
+            st.warning("Please type a question.")
+        else:
+            st.success(simple_ai_answer(question))
 
-def generate_ai_flashcards(ai, topic, count):
+# ---------------- QUIZ ----------------
+if menu == "Quiz":
+    st.title(f"📝 {subject} Quiz")
 
-    prompt = f"""
-Create {count} flashcards about {topic}.
+    # Reset question pool if empty
+    if len(st.session_state.question_pool) == 0:
+        st.success("All questions answered! Resetting quiz.")
+        st.session_state.question_pool = random.sample(QUIZ_BANK[subject], len(QUIZ_BANK[subject]))
 
-Return JSON like:
-[
-{{"question":"...","answer":"..."}}
-]
-"""
+    # Get current question
+    q = st.session_state.question_pool[0]
+    st.write("###", q["question"])
+    choice = st.radio("Choose answer", q["options"], key=f"{subject}_{q['question']}")
 
-    res = ai_chat(ai, [
-        {"role":"system","content":"You are a study assistant."},
-        {"role":"user","content":prompt}
-    ])
+    if st.button("Submit Answer"):
+        if choice == q["answer"]:
+            st.success("✅ Correct!")
+            st.session_state.score += 1
+        else:
+            st.error("❌ Wrong!")
+            st.info(f"The correct answer is: {q['answer']}")
 
-    try:
-        return json.loads(res)
-    except:
-        return []
-
-
-# ---------------- AI QUIZ ---------------- #
-
-def generate_ai_quiz(ai, topic, count):
-
-    prompt = f"""
-Create {count} quiz questions about {topic}.
-
-Return JSON:
-
-[
-{{
-"question":"...",
-"options":["A","B","C","D"],
-"answer":"..."
-}}
-]
-"""
-
-    res = ai_chat(ai, [
-        {"role":"system","content":"You generate study quizzes"},
-        {"role":"user","content":prompt}
-    ])
-
-    try:
-        return json.loads(res)
-    except:
-        return []
-
-
-# ---------------- PROGRESS ---------------- #
-
-def update_streak(user):
-
-    stats = user.get("stats", {})
-
-    today = datetime.now().date()
-
-    last = stats.get("last_study")
-
-    if last:
-
-        last = datetime.fromisoformat(last).date()
-
-        if (today - last).days == 1:
-
-            stats["study_streak"] += 1
-
-    stats["last_study"] = today.isoformat()
-
-    return stats
-
-
-# ---------------- MAIN ---------------- #
-
-def main():
-
-    init_state()
-
-    db = init_firebase()
-
-    ai = init_openai()
-
-    if not st.session_state.logged_in:
-
-        login_signup(db)
-
-        st.stop()
-
-    username = st.session_state.username
-
-    user = get_user(db, username)
-
-    st.sidebar.title("ALINEE Study Hub")
-
-    subject = st.sidebar.selectbox("Subject", SUBJECTS)
-
-    menu = st.sidebar.radio(
-        "Menu",
-        [
-            "Dashboard",
-            "AI Assistant",
-            "Flashcards",
-            "AI Quiz",
-            "Notes",
-            "Progress"
-        ]
-    )
-
-    if st.sidebar.button("Logout"):
-
-        st.session_state.logged_in = False
+        # Remove answered question
+        st.session_state.question_pool.pop(0)
         st.rerun()
-
-    flashcards = user.get("flashcards", {})
-    notes = user.get("notes", {})
-    scores = user.get("scores", {})
-
-    subject_cards = flashcards.get(subject, [])
-
-    # ---------------- DASHBOARD ---------------- #
-
-    if menu == "Dashboard":
-
-        st.title("📊 Dashboard")
-
-        st.metric("Flashcards", len(subject_cards))
-
-        st.metric("Best Score", scores.get(subject, 0))
-
-    # ---------------- AI ASSISTANT ---------------- #
-
-    if menu == "AI Assistant":
-
-        st.title("🤖 AI Tutor")
-
-        question = st.text_area("Ask a question")
-
-        if st.button("Ask AI"):
-
-            answer = ai_chat(ai, [
-                {"role":"system","content":"You are a helpful tutor"},
-                {"role":"user","content":question}
-            ])
-
-            st.success(answer)
-
-    # ---------------- FLASHCARDS ---------------- #
-
-    if menu == "Flashcards":
-
-        st.title("📇 Flashcards")
-
-        q = st.text_input("Question")
-
-        a = st.text_input("Answer")
-
-        if st.button("Save Flashcard"):
-
-            subject_cards.append({"q":q,"a":a})
-
-            flashcards[subject] = subject_cards
-
-            update_user(db, username, {"flashcards":flashcards})
-
-            st.success("Saved")
-
-            st.rerun()
-
-        for c in subject_cards:
-
-            st.write("Q:", c["q"])
-            st.write("A:", c["a"])
-
-            st.divider()
-
-    # ---------------- AI FLASHCARDS ---------------- #
-
-    if menu == "AI Quiz":
-
-        st.title("📝 AI Quiz Generator")
-
-        topic = st.text_input("Quiz topic")
-
-        if st.button("Generate Quiz"):
-
-            quiz = generate_ai_quiz(ai, topic, 5)
-
-            score = 0
-
-            answers = {}
-
-            for i, q in enumerate(quiz):
-
-                answers[i] = st.radio(q["question"], q["options"], key=i)
-
-            if st.button("Submit Quiz"):
-
-                for i, q in enumerate(quiz):
-
-                    if answers[i] == q["answer"]:
-                        score += 1
-
-                scores[subject] = max(score, scores.get(subject,0))
-
-                update_user(db, username, {"scores":scores})
-
-                st.success(f"Score {score}/{len(quiz)}")
-
-    # ---------------- NOTES ---------------- #
-
-    if menu == "Notes":
-
-        st.title("🗒️ Notes")
-
-        txt = st.text_area("Notes", value=notes.get(subject,""))
-
-        if st.button("Save Notes"):
-
-            notes[subject] = txt
-
-            update_user(db, username, {"notes":notes})
-
-            st.success("Saved")
-
-    # ---------------- PROGRESS ---------------- #
-
-    if menu == "Progress":
-
-        st.title("📈 Progress")
-
-        stats = update_streak(user)
-
-        st.metric("Study Streak 🔥", stats.get("study_streak",0))
-
-        st.write("Flashcards:", sum(len(flashcards.get(s,[])) for s in SUBJECTS))
-
-        st.write("Notes subjects:", len([n for n in notes.values() if n]))
-
-
-if __name__ == "__main__":
-    main()

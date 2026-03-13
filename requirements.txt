@@ -1,4 +1,2 @@
-streamlit
-firebase-admin
-openai
-random
+streamlit>=1.36.0
+firebase-admin>=6.5.0

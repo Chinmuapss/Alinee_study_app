@@ -96,8 +96,7 @@ LANGUAGE_FACTS = {
     "SQL": {"func": "CREATE PROCEDURE", "comment": "--", "runtime": "Query language", "ext": ".sql"},
     "Go": {"func": "func", "comment": "//", "runtime": "Compiled", "ext": ".go"},
 }
-
-    return questions
+def build_question_bank(lang):
 
 
 def init_state() -> None:

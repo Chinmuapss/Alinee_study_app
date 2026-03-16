@@ -97,86 +97,18 @@ LANGUAGE_FACTS = {
     "Go": {"func": "func", "comment": "//", "runtime": "Compiled", "ext": ".go"},
 }
 
-
-def build_question_bank(language: str) -> list[dict]:
-    """Generate 100 deterministic quiz questions for a language."""
-    facts = LANGUAGE_FACTS[language]
-    rng = random.Random(language)
-    questions: list[dict] = []
-
-    for i in range(1, 101):
-        template_id = i % 10
-        if template_id == 0:
-            q = f"[{language} #{i}] Which file extension is most common for {language} source files?"
-            answer = facts["ext"]
-            options = [answer, ".txt", ".bin", ".data"]
-            explanation = f"{language} files are usually saved with {facts['ext']}."
-        elif template_id == 1:
-            q = f"[{language} #{i}] Which token is commonly used to start comments in {language}?"
-            answer = facts["comment"]
-            options = [answer, "%%", ";;", "@@"]
-            explanation = f"In {language}, `{facts['comment']}` is the common comment marker."
-        elif template_id == 2:
-            q = f"[{language} #{i}] Which option best describes {language}?"
-            answer = facts["runtime"]
-            options = [answer, "Markup language", "Version control system", "Operating system"]
-            explanation = f"Correct classification: {facts['runtime']}."
-        elif template_id == 3:
-            q = f"[{language} #{i}] Which function declaration keyword/pattern fits {language}?"
-            answer = facts["func"]
-            options = [answer, "lambda only", "define", "proc-start"]
-            explanation = f"`{facts['func']}` is associated with function declaration in {language}."
-        elif template_id == 4:
-            left = (i * 2) % 11
-            right = (i * 3) % 7
-            q = f"[{language} #{i}] In a basic arithmetic expression, what is {left} + {right}?"
-            answer = str(left + right)
-            options = [answer, str(left + right + 1), str(left + right - 1), str(left + right + 2)]
-            explanation = "Arithmetic fundamentals apply in every language."
-        elif template_id == 5:
-            loop_count = (i % 5) + 2
-            q = f"[{language} #{i}] A loop runs from 0 to {loop_count - 1}. How many iterations happen?"
-            answer = str(loop_count)
-            options = [answer, str(loop_count + 1), str(loop_count - 1), str(loop_count + 2)]
-            explanation = "A range from 0 to n-1 runs exactly n times."
-        elif template_id == 6:
-            q = f"[{language} #{i}] Which is a good coding habit in {language}?"
-            answer = "Use meaningful variable names"
-            options = [answer, "Write everything in one line", "Ignore formatting", "Skip testing"]
-            explanation = "Readable, maintainable code improves team productivity."
-        elif template_id == 7:
-            q = f"[{language} #{i}] What usually helps debug code fastest?"
-            answer = "Read error messages carefully"
-            options = [answer, "Delete random lines", "Restart repeatedly", "Avoid logs"]
-            explanation = "Error messages give direct clues for fixing issues."
-        elif template_id == 8:
-            q = f"[{language} #{i}] Which practice improves long-term mastery?"
-            answer = "Build small projects consistently"
-            options = [answer, "Memorize without practice", "Skip fundamentals", "Avoid documentation"]
-            explanation = "Consistent practice creates lasting skill growth."
-        else:
-            q = f"[{language} #{i}] Which statement is true about learning {language}?"
-            answer = "Practice + review beats cramming"
-            options = [answer, "One tutorial is always enough", "Syntax is everything", "Debugging is optional"]
-            explanation = "Spaced repetition and practice lead to better retention."
-
-        rng.shuffle(options)
-        questions.append(
-            {
-                "id": f"{language}-{i}",
-                "question": q,
-                "options": options,
-                "answer": answer,
-                "explanation": explanation,
-            }
-        )
-
+def build_question_bank(lang):
+    facts = LANGUAGE_FACTS[lang]
+    questions = []
     return questions
 
 
-def init_state() -> None:
+def init_state():
+
     if "question_bank" not in st.session_state:
-        st.session_state.question_bank = {lang: build_question_bank(lang) for lang in LANGUAGES}
+        st.session_state.question_bank = {
+            lang: build_question_bank(lang) for lang in LANGUAGES
+        }
 
     if "progress" not in st.session_state:
         st.session_state.progress = {
@@ -184,27 +116,16 @@ def init_state() -> None:
                 "remaining": [q["id"] for q in st.session_state.question_bank[lang]],
                 "current": None,
                 "attempted": 0,
-                "correct": 0,
-                "history": [],
+                "correct": 0
             }
             for lang in LANGUAGES
         }
 
-    if "quiz_feedback" not in st.session_state:
-        st.session_state.quiz_feedback = {lang: None for lang in LANGUAGES}
 
-    if "special_challenge" not in st.session_state:
-        st.session_state.special_challenge = {lang: None for lang in LANGUAGES}
+def get_questions():
+    questions = []
 
-
-def get_question(lang: str, qid: str) -> dict:
-    return next(q for q in st.session_state.question_bank[lang] if q["id"] == qid)
-
-
-
-
-def normalize_answer(value: str) -> str:
-    return " ".join(value.strip().lower().split())
+    return questions
 
 
 def next_question(lang: str) -> dict | None:
@@ -215,14 +136,6 @@ def next_question(lang: str) -> dict | None:
     chosen = random.choice(data["remaining"])
     data["current"] = chosen
     return get_question(lang, chosen)
-
-def get_special_challenge_question(lang: str) -> dict:
-    current_qid = st.session_state.special_challenge[lang]
-    if current_qid is None:
-        current_qid = random.choice(st.session_state.question_bank[lang])["id"]
-        st.session_state.special_challenge[lang] = current_qid
-    return get_question(lang, current_qid)
-
 
 
 def dashboard() -> None:
@@ -258,16 +171,11 @@ def quizzes() -> None:
     st.caption(
         f"{lang}: {data['attempted']}/100 attempted • {data['correct']} correct • {len(data['remaining'])} left"
     )
-    st.progress(data["attempted"], text=f"{lang} completion: {data['attempted']} / 100")
 
     if data["current"] is None:
         question = next_question(lang)
     else:
         question = get_question(lang, data["current"])
-
-    feedback = st.session_state.quiz_feedback[lang]
-    if feedback:
-        st.info(feedback)
 
     if question is None:
         st.success("Amazing! You completed all 100 questions for this language with no repeats.")
@@ -279,16 +187,13 @@ def quizzes() -> None:
                 "correct": 0,
                 "history": [],
             }
-            st.session_state.quiz_feedback[lang] = None
             st.rerun()
         return
 
     st.markdown(f"### {question['question']}")
-    with st.form(key=f"quiz_form_{lang}_{question['id']}"):
-        selected = st.radio("Pick your answer", question["options"], key=f"answer_{question['id']}")
-        submitted = st.form_submit_button("Submit answer", type="primary")
+    selected = st.radio("Pick your answer", question["options"], key=f"answer_{question['id']}")
 
-    if submitted:
+    if st.button("Submit answer", type="primary"):
         correct = selected == question["answer"]
         data["attempted"] += 1
         data["correct"] += int(correct)
@@ -304,12 +209,14 @@ def quizzes() -> None:
         data["current"] = None
 
         if correct:
-            st.session_state.quiz_feedback[lang] = f"✅ Correct! {question['explanation']}"
+            st.success("Correct! Great job.")
         else:
-            st.session_state.quiz_feedback[lang] = (
-                f"❌ Not quite. Correct answer: {question['answer']}. {question['explanation']}"
-            )
-        st.rerun()
+            st.error(f"Not quite. Correct answer: {question['answer']}")
+        st.info(question["explanation"])
+
+        if st.button("Next question"):
+            st.rerun()
+
 
 def cheat_sheets() -> None:
     st.title("📘 Code Cheat Sheets")
@@ -350,46 +257,38 @@ def progress_tracker() -> None:
         st.info("No quiz activity yet. Start answering questions to build your history.")
 
 
-def special_features() -> None:
+def special_features():
+
     st.title("✨ Special Features")
 
-    st.subheader("Daily Challenge")
+    # Ensure question bank exists
+    if "question_bank" not in st.session_state:
+        st.warning("System is loading... please refresh.")
+        return
+
     challenge_lang = LANGUAGES[date.today().toordinal() % len(LANGUAGES)]
-    challenge_q = st.session_state.question_bank[challenge_lang][date.today().toordinal() % 100]
-    st.write(f"Today's language: **{challenge_lang}**")
+
+    questions = st.session_state.question_bank.get(challenge_lang, [])
+
+    if len(questions) == 0:
+        st.warning("No questions found. Please refresh the app.")
+        return
+
+    index = date.today().toordinal() % len(questions)
+
+    challenge_q = questions[index]
+
+    st.write("Daily Challenge Language:", challenge_lang)
     st.write(challenge_q["question"])
 
-    user_answer = st.text_input(
-        "Type your daily challenge answer",
-        key=f"daily_answer_{challenge_q['id']}",
-        placeholder="Enter your answer here...",
-    )
-    if st.button("Check Daily Challenge Answer"):
-        if not user_answer.strip():
-            st.warning("Please type an answer before checking.")
-        elif normalize_answer(user_answer) == normalize_answer(str(challenge_q["answer"])):
-            st.success("✅ Correct! Great job on today's challenge.")
-        else:
-            st.error(f"❌ Incorrect. Correct answer: {challenge_q['answer']}")
+    user_answer = st.text_input("Your Answer")
 
-    st.subheader("Practice Challenge (Any Language)")
-    practice_lang = st.selectbox("Pick language for practice challenge", LANGUAGES, key="practice_lang")
-    practice_q = get_special_challenge_question(practice_lang)
-    st.write(practice_q["question"])
-    typed = st.text_input("Your answer", key=f"practice_answer_{practice_lang}")
-    c1, c2 = st.columns(2)
-    if c1.button("Check practice answer"):
-        if not typed.strip():
-            st.warning("Please type your answer first.")
-        elif normalize_answer(typed) == normalize_answer(str(practice_q["answer"])):
-            st.success("✅ Correct answer!")
+    if st.button("Check Answer"):
+
+        if user_answer.strip() == challenge_q["answer"]:
+            st.success("Correct!")
         else:
-            st.error(f"❌ Wrong answer. Correct answer: {practice_q['answer']}")
-    if c2.button("New practice challenge"):
-        st.session_state.special_challenge[practice_lang] = random.choice(
-            st.session_state.question_bank[practice_lang]
-        )["id"]
-        st.rerun()
+            st.error(f"Wrong. Correct answer: {challenge_q['answer']}")
 
     st.subheader("Adaptive Recommendation")
     weakest = None
@@ -422,14 +321,15 @@ def special_features() -> None:
 
     st.write(", ".join(badges) if badges else "No badges yet — start quizzing to unlock achievements!")
 
-def main() -> None:
-    init_state()
+
+def main():
+    init_state()   # <-- THIS MUST BE FIRST
 
     st.sidebar.title("ALINEE Study App")
-    st.sidebar.caption("User-friendly coding learning dashboard")
+
     page = st.sidebar.radio(
         "Navigate",
-        ["Dashboard", "Quizzes", "Cheat Sheets", "Progress Tracker", "Special Features"],
+        ["Dashboard","Quizzes","Cheat Sheets","Progress Tracker","Special Features"]
     )
 
     if page == "Dashboard":

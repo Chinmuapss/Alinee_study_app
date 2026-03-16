@@ -8,7 +8,7 @@ import streamlit as st
 from firebase_admin import credentials, firestore
 
 st.set_page_config(page_title="CodeLingo by ALINEE", page_icon="🦜", layout="wide")
-
+QUIZZES_PER_SUBJECT = 5
 SUBJECTS = ["Python", "JavaScript", "Java", "C++", "SQL"]
 
 LESSON_NOTES = {

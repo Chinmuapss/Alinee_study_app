@@ -117,8 +117,7 @@ def init_state() -> None:
         }
 
 
-def get_question(lang: str, qid: str) -> dict:
-    return next(q for q in st.session_state.question_bank[lang] if q["id"] == qid)
+
 def get_questions():
     questions = []
 

@@ -1,481 +1,391 @@
-import hashlib
 import random
-from datetime import datetime, timezone
-from typing import Any
+from datetime import date
 
-import firebase_admin
 import streamlit as st
-from firebase_admin import credentials, firestore
 
-st.set_page_config(page_title="CodeLingo by ALINEE", page_icon="🦜", layout="wide")
-QUIZZES_PER_SUBJECT = 5
-SUBJECTS = ["Python", "JavaScript", "Java", "C++", "SQL"]
+st.set_page_config(page_title="ALINEE Study App", page_icon="📚", layout="wide")
 
-LESSON_NOTES = {
-    "Python": """### Python Quick Notes
-- **Syntax first:** indentation defines blocks.
-- **Core types:** `str`, `int`, `float`, `list`, `dict`, `set`, `tuple`.
-- **Loops:** `for item in items` and `while condition`.
-- **Functions:** `def name(args): return value`.
-- **Why Python?** Fast prototyping, AI/data work, scripting, backend APIs.
+LANGUAGES = ["Python", "Java", "C++", "JavaScript", "SQL", "Go"]
+
+CHEAT_SHEETS = {
+    "Python": """
+### Python Cheat Sheet
+```python
+# variables
+name = "ALINEE"
+
+# function
+def greet(user: str) -> str:
+    return f"Hello, {user}!"
+
+# loop
+for i in range(3):
+    print(i)
+```
+- Uses indentation for blocks.
+- Dynamic typing and clean syntax.
 """,
-    "JavaScript": """### JavaScript Quick Notes
-- Runs in the browser and on servers (Node.js).
-- **Variables:** `let`, `const` (prefer `const` by default).
-- **Functions:** normal, arrow `() => {}`.
-- **Async:** `Promise`, `async/await`.
-- **Why JavaScript?** Essential for web interactivity.
+    "Java": """
+### Java Cheat Sheet
+```java
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello Java");
+    }
+}
+```
+- Class-based and statically typed.
+- Compile to JVM bytecode.
 """,
-    "Java": """### Java Quick Notes
-- Strongly typed, object-oriented language.
-- **Compile + run** on JVM.
-- **Classes/objects** are core building blocks.
-- **Collections:** `ArrayList`, `HashMap`.
-- **Why Java?** Enterprise systems and Android foundation.
+    "C++": """
+### C++ Cheat Sheet
+```cpp
+#include <iostream>
+using namespace std;
+
+int main() {
+    cout << "Hello C++" << endl;
+    return 0;
+}
+```
+- Compiled, high performance.
+- STL includes `vector`, `map`, `string`.
 """,
-    "C++": """### C++ Quick Notes
-- High-performance compiled language.
-- Supports procedural + object-oriented + generic programming.
-- **Memory:** can use pointers and references.
-- **STL:** `vector`, `map`, `string`, algorithms.
-- **Why C++?** Games, systems, and performance-critical software.
+    "JavaScript": """
+### JavaScript Cheat Sheet
+```javascript
+const greet = (user) => {
+  console.log(`Hello ${user}`);
+};
+```
+- Runs in browser and Node.js.
+- `let` and `const` are preferred over `var`.
 """,
-    "SQL": """### SQL Quick Notes
-- Query language for relational databases.
-- Core commands: `SELECT`, `INSERT`, `UPDATE`, `DELETE`.
-- Filter with `WHERE`, combine with `JOIN`.
-- Aggregate with `COUNT`, `AVG`, `SUM`, grouped by `GROUP BY`.
-- **Why SQL?** Data retrieval and analytics everywhere.
+    "SQL": """
+### SQL Cheat Sheet
+```sql
+SELECT name, score
+FROM students
+WHERE score >= 80
+ORDER BY score DESC;
+```
+- `SELECT` reads rows.
+- `JOIN` combines tables.
+- `GROUP BY` aggregates data.
+""",
+    "Go": """
+### Go Cheat Sheet
+```go
+package main
+import "fmt"
+
+func main() {
+    fmt.Println("Hello Go")
+}
+```
+- Simple syntax and fast compilation.
+- Great for backend services and concurrency.
 """,
 }
 
-QUIZ_BANK = {
-    "Python": [
-        {
-            "q": "Which keyword is used to define a function in Python?",
-            "options": ["function", "def", "fn", "lambda"],
-            "a": "def",
-        },
-        {
-            "q": "What data type is `[1, 2, 3]` in Python?",
-            "options": ["tuple", "set", "list", "dict"],
-            "a": "list",
-        },
-        {
-            "q": "How do you start a for loop over a list called `items`?",
-            "options": [
-                "for i to items",
-                "for i in items:",
-                "loop i in items",
-                "for(items)",
-            ],
-            "a": "for i in items:",
-        },
-    ],
-    "JavaScript": [
-        {
-            "q": "Which keyword cannot be reassigned?",
-            "options": ["var", "let", "const", "mutable"],
-            "a": "const",
-        },
-        {
-            "q": "Which syntax defines an arrow function?",
-            "options": ["function => {}", "() => {}", "->", "fn()"],
-            "a": "() => {}",
-        },
-        {
-            "q": "Which feature is used for asynchronous code in modern JavaScript?",
-            "options": ["sync/wait", "await/async", "pause/go", "thread.join"],
-            "a": "await/async",
-        },
-    ],
-    "Java": [
-        {
-            "q": "Java source code is compiled into what?",
-            "options": ["Machine code", "Bytecode", "Python", "HTML"],
-            "a": "Bytecode",
-        },
-        {
-            "q": "Which keyword creates a class instance?",
-            "options": ["create", "instance", "new", "init"],
-            "a": "new",
-        },
-        {
-            "q": "Which collection allows key-value pairs in Java?",
-            "options": ["ArrayList", "HashMap", "Stack", "Queue"],
-            "a": "HashMap",
-        },
-    ],
-    "C++": [
-        {
-            "q": "Which symbol is commonly used for a pointer declaration?",
-            "options": ["&", "*", "%", "#"],
-            "a": "*",
-        },
-        {
-            "q": "Which container is part of STL?",
-            "options": ["vector", "arraylist", "dictionary", "dataset"],
-            "a": "vector",
-        },
-        {
-            "q": "Why is C++ often used in game engines?",
-            "options": ["Low performance", "High performance", "No compilation", "Only web use"],
-            "a": "High performance",
-        },
-    ],
-    "SQL": [
-        {
-            "q": "Which SQL command retrieves data?",
-            "options": ["PULL", "GET", "SELECT", "FETCHROW"],
-            "a": "SELECT",
-        },
-        {
-            "q": "Which clause filters rows?",
-            "options": ["ORDER BY", "WHERE", "GROUP BY", "LIMIT"],
-            "a": "WHERE",
-        },
-        {
-            "q": "Which keyword combines rows from two tables?",
-            "options": ["MERGE", "JOIN", "PAIR", "UNION ONLY"],
-            "a": "JOIN",
-        },
-    ],
+LANGUAGE_FACTS = {
+    "Python": {"func": "def", "comment": "#", "runtime": "Interpreted", "ext": ".py"},
+    "Java": {"func": "public static", "comment": "//", "runtime": "Compiled to bytecode", "ext": ".java"},
+    "C++": {"func": "int", "comment": "//", "runtime": "Compiled", "ext": ".cpp"},
+    "JavaScript": {"func": "function", "comment": "//", "runtime": "Interpreted/JIT", "ext": ".js"},
+    "SQL": {"func": "CREATE PROCEDURE", "comment": "--", "runtime": "Query language", "ext": ".sql"},
+    "Go": {"func": "func", "comment": "//", "runtime": "Compiled", "ext": ".go"},
 }
+
+
+def build_question_bank(language: str) -> list[dict]:
+    facts = LANGUAGE_FACTS[language]
+    rng = random.Random(language)
+    questions: list[dict] = []
+
+    for i in range(1, 101):
+        template_id = i % 10
+        if template_id == 0:
+            q = f"[{language} #{i}] Which file extension is most common for {language} source files?"
+            answer = facts["ext"]
+            options = [answer, ".txt", ".bin", ".data"]
+            explanation = f"{language} files are usually saved with {facts['ext']}."
+        elif template_id == 1:
+            q = f"[{language} #{i}] Which token is commonly used to start comments in {language}?"
+            answer = facts["comment"]
+            options = [answer, "%%", ";;", "@@"]
+            explanation = f"In {language}, `{facts['comment']}` is the common comment marker."
+        elif template_id == 2:
+            q = f"[{language} #{i}] Which option best describes {language}?"
+            answer = facts["runtime"]
+            options = [answer, "Markup language", "Version control system", "Operating system"]
+            explanation = f"Correct classification: {facts['runtime']}."
+        elif template_id == 3:
+            q = f"[{language} #{i}] Which function declaration keyword/pattern fits {language}?"
+            answer = facts["func"]
+            options = [answer, "lambda only", "define", "proc-start"]
+            explanation = f"`{facts['func']}` is associated with function declaration in {language}."
+        elif template_id == 4:
+            left = (i * 2) % 11
+            right = (i * 3) % 7
+            q = f"[{language} #{i}] In a basic arithmetic expression, what is {left} + {right}?"
+            answer = str(left + right)
+            options = [answer, str(left + right + 1), str(left + right - 1), str(left + right + 2)]
+            explanation = "Arithmetic fundamentals apply in every language."
+        elif template_id == 5:
+            loop_count = (i % 5) + 2
+            q = f"[{language} #{i}] A loop runs from 0 to {loop_count - 1}. How many iterations happen?"
+            answer = str(loop_count)
+            options = [answer, str(loop_count + 1), str(loop_count - 1), str(loop_count + 2)]
+            explanation = "A range from 0 to n-1 runs exactly n times."
+        elif template_id == 6:
+            q = f"[{language} #{i}] Which is a good coding habit in {language}?"
+            answer = "Use meaningful variable names"
+            options = [answer, "Write everything in one line", "Ignore formatting", "Skip testing"]
+            explanation = "Readable, maintainable code improves team productivity."
+        elif template_id == 7:
+            q = f"[{language} #{i}] What usually helps debug code fastest?"
+            answer = "Read error messages carefully"
+            options = [answer, "Delete random lines", "Restart repeatedly", "Avoid logs"]
+            explanation = "Error messages give direct clues for fixing issues."
+        elif template_id == 8:
+            q = f"[{language} #{i}] Which practice improves long-term mastery?"
+            answer = "Build small projects consistently"
+            options = [answer, "Memorize without practice", "Skip fundamentals", "Avoid documentation"]
+            explanation = "Consistent practice creates lasting skill growth."
+        else:
+            q = f"[{language} #{i}] Which statement is true about learning {language}?"
+            answer = "Practice + review beats cramming"
+            options = [answer, "One tutorial is always enough", "Syntax is everything", "Debugging is optional"]
+            explanation = "Spaced repetition and practice lead to better retention."
+
+        rng.shuffle(options)
+        questions.append(
+            {
+                "id": f"{language}-{i}",
+                "question": q,
+                "options": options,
+                "answer": answer,
+                "explanation": explanation,
+            }
+        )
+
+    return questions
 
 
 def init_state() -> None:
-    defaults = {
-        "logged_in": False,
-        "username": "",
-        "firebase_ready": False,
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    if "question_bank" not in st.session_state:
+        st.session_state.question_bank = {lang: build_question_bank(lang) for lang in LANGUAGES}
+
+    if "progress" not in st.session_state:
+        st.session_state.progress = {
+            lang: {
+                "remaining": [q["id"] for q in st.session_state.question_bank[lang]],
+                "current": None,
+                "attempted": 0,
+                "correct": 0,
+                "history": [],
+            }
+            for lang in LANGUAGES
+        }
 
 
-def init_firebase() -> firestore.Client | None:
-    try:
-        firebase_cfg = dict(st.secrets["firebase"])
-    except Exception:
-        st.error("Firebase config missing. Add [firebase] credentials in `.streamlit/secrets.toml`.")
+def get_question(lang: str, qid: str) -> dict:
+    return next(q for q in st.session_state.question_bank[lang] if q["id"] == qid)
+
+
+def next_question(lang: str) -> dict | None:
+    data = st.session_state.progress[lang]
+    if not data["remaining"]:
+        data["current"] = None
         return None
-
-    try:
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(firebase_cfg)
-            firebase_admin.initialize_app(cred)
-        st.session_state.firebase_ready = True
-        return firestore.client()
-    except Exception as exc:
-        st.error(f"Failed to initialize Firebase: {exc}")
-        return None
+    chosen = random.choice(data["remaining"])
+    data["current"] = chosen
+    return get_question(lang, chosen)
 
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+def dashboard() -> None:
+    st.title("📊 Learning Dashboard")
+    total_attempted = sum(st.session_state.progress[l]["attempted"] for l in LANGUAGES)
+    total_correct = sum(st.session_state.progress[l]["correct"] for l in LANGUAGES)
+    total_questions = len(LANGUAGES) * 100
+    completion = int((total_attempted / total_questions) * 100) if total_questions else 0
+    accuracy = int((total_correct / total_attempted) * 100) if total_attempted else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Languages", len(LANGUAGES))
+    c2.metric("Questions Attempted", total_attempted)
+    c3.metric("Accuracy", f"{accuracy}%")
+    c4.metric("Overall Completion", f"{completion}%")
+
+    st.progress(completion, text=f"Course completion: {completion}%")
+
+    st.subheader("Per-language status")
+    for lang in LANGUAGES:
+        stats = st.session_state.progress[lang]
+        lang_completion = int((stats["attempted"] / 100) * 100)
+        lang_accuracy = int((stats["correct"] / stats["attempted"]) * 100) if stats["attempted"] else 0
+        st.write(f"**{lang}** — completion: {lang_completion}%, accuracy: {lang_accuracy}%")
+        st.progress(lang_completion)
 
 
-def verify_password(raw_password: str, stored_password: str) -> bool:
-    if not stored_password:
-        return False
-    return stored_password == raw_password or stored_password == hash_password(raw_password)
+def quizzes() -> None:
+    st.title("🧠 Smart Quiz Arena")
+    lang = st.selectbox("Choose language", LANGUAGES)
+    data = st.session_state.progress[lang]
 
+    st.caption(
+        f"{lang}: {data['attempted']}/100 attempted • {data['correct']} correct • {len(data['remaining'])} left"
+    )
 
-def safe_user_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    base = {
-        "password": "",
-        "notes": {},
-        "scores": {},
-        "stats": {},
-        "answered_quizzes": {},
-    }
-    if not payload:
-        return base
-
-    base.update(payload)
-    for key in ["notes", "scores", "stats", "answered_quizzes"]:
-        if not isinstance(base.get(key), dict):
-            base[key] = {}
-
-    for subject in SUBJECTS:
-        answered_ids = base["answered_quizzes"].get(subject, [])
-        if not isinstance(answered_ids, list):
-            base["answered_quizzes"][subject] = []
-    return base
-
-
-def get_user(db: firestore.Client, username: str) -> dict[str, Any] | None:
-    try:
-        doc = db.collection("users").document(username).get()
-        if not doc.exists:
-            return None
-        return safe_user_payload(doc.to_dict())
-    except Exception as exc:
-        st.error(f"Database read error: {exc}")
-        return None
-
-
-def create_user(db: firestore.Client, username: str, password: str) -> bool:
-    try:
-        ref = db.collection("users").document(username)
-        if ref.get().exists:
-            return False
-        ref.set(safe_user_payload({"password": hash_password(password)}))
-        return True
-    except Exception as exc:
-        st.error(f"Database write error: {exc}")
-        return False
-
-
-def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> None:
-    try:
-        db.collection("users").document(username).set(data, merge=True)
-    except Exception as exc:
-        st.error(f"Database update error: {exc}")
-
-
-def update_progress_stats(db: firestore.Client, username: str, user_data: dict[str, Any], action: str) -> None:
-    stats = user_data.get("stats", {})
-    stats[action] = int(stats.get(action, 0)) + 1
-    stats["last_activity_utc"] = datetime.now(timezone.utc).isoformat()
-    update_user(db, username, {"stats": stats})
-
-
-def login_signup(db: firestore.Client) -> None:
-    st.title("🦜 CodeLingo by ALINEE")
-    st.subheader("Login or create your account")
-
-    mode = st.radio("Account", ["Login", "Sign Up"], horizontal=True)
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if mode == "Sign Up":
-        confirm = st.text_input("Confirm Password", type="password")
-        if st.button("Create Account", use_container_width=True):
-            if not username.strip() or not password:
-                st.error("Username and password are required.")
-            elif password != confirm:
-                st.error("Passwords do not match.")
-            elif create_user(db, username.strip(), password):
-                st.success("Account created successfully. Please log in.")
-            else:
-                st.error("Username already exists.")
+    if data["current"] is None:
+        question = next_question(lang)
     else:
-        if st.button("Login", use_container_width=True):
-            user = get_user(db, username.strip())
-            if user and verify_password(password, user.get("password", "")):
-                st.session_state.logged_in = True
-                st.session_state.username = username.strip()
-                st.rerun()
-            else:
-                st.error("Invalid username or password.")
+        question = get_question(lang, data["current"])
+
+    if question is None:
+        st.success("Amazing! You completed all 100 questions for this language with no repeats.")
+        if st.button("Reset this language quiz"):
+            st.session_state.progress[lang] = {
+                "remaining": [q["id"] for q in st.session_state.question_bank[lang]],
+                "current": None,
+                "attempted": 0,
+                "correct": 0,
+                "history": [],
+            }
+            st.rerun()
+        return
+
+    st.markdown(f"### {question['question']}")
+    selected = st.radio("Pick your answer", question["options"], key=f"answer_{question['id']}")
+
+    if st.button("Submit answer", type="primary"):
+        correct = selected == question["answer"]
+        data["attempted"] += 1
+        data["correct"] += int(correct)
+        data["remaining"].remove(question["id"])
+        data["history"].append(
+            {
+                "question": question["question"],
+                "selected": selected,
+                "correct_answer": question["answer"],
+                "result": "✅ Correct" if correct else "❌ Incorrect",
+            }
+        )
+        data["current"] = None
+
+        if correct:
+            st.success("Correct! Great job.")
+        else:
+            st.error(f"Not quite. Correct answer: {question['answer']}")
+        st.info(question["explanation"])
+
+        if st.button("Next question"):
+            st.rerun()
 
 
-def build_quiz_bank() -> dict[str, list[dict[str, Any]]]:
-    templates: dict[str, list[dict[str, Any]]] = {
-        "Python": [
-            {"q": "Which keyword defines a function in Python?", "a": "def", "wrong": ["function", "fn", "lambda"]},
-            {"q": "Which data type stores key-value pairs?", "a": "dict", "wrong": ["list", "tuple", "set"]},
-            {"q": "How do you start a loop over items?", "a": "for item in items:", "wrong": ["for(item)", "loop item items", "foreach items"]},
-            {"q": "Which keyword handles exceptions?", "a": "except", "wrong": ["catch", "rescue", "error"]},
-            {"q": "What value represents nothing?", "a": "None", "wrong": ["null", "nil", "empty"]},
-        ],
-        "JavaScript": [
-            {"q": "Which declaration cannot be reassigned?", "a": "const", "wrong": ["var", "let", "mutable"]},
-            {"q": "What syntax defines an arrow function?", "a": "() => {}", "wrong": ["function => {}", "->", "fn()"]},
-            {"q": "Which pair is used for async flows?", "a": "async/await", "wrong": ["wait/run", "pause/go", "sync/await"]},
-            {"q": "Which value means strict equality operator?", "a": "===", "wrong": ["==", "=", "=>"]},
-            {"q": "Which object usually logs to browser console?", "a": "console", "wrong": ["window", "screen", "document"]},
-        ],
-        "Java": [
-            {"q": "Java code compiles to what?", "a": "Bytecode", "wrong": ["Machine code", "Python", "HTML"]},
-            {"q": "Which keyword creates an object instance?", "a": "new", "wrong": ["create", "instance", "init"]},
-            {"q": "Which keyword defines inheritance?", "a": "extends", "wrong": ["inherits", "implements", "super"]},
-            {"q": "Which type stores true/false?", "a": "boolean", "wrong": ["bool", "bit", "binary"]},
-            {"q": "Which collection stores key-value pairs?", "a": "HashMap", "wrong": ["ArrayList", "Stack", "Queue"]},
-        ],
-        "C++": [
-            {"q": "Which symbol marks pointer declaration?", "a": "*", "wrong": ["&", "%", "#"]},
-            {"q": "Which namespace is standard library?", "a": "std", "wrong": ["cpp", "core", "lib"]},
-            {"q": "Which STL container is dynamic array?", "a": "vector", "wrong": ["map", "set", "queue"]},
-            {"q": "Which file extension is C++ header?", "a": ".hpp", "wrong": [".java", ".py", ".sql"]},
-            {"q": "What is C++ mainly known for?", "a": "High performance", "wrong": ["No compilation", "Only web", "Low speed"]},
-        ],
-        "SQL": [
-            {"q": "Which command retrieves records?", "a": "SELECT", "wrong": ["GET", "PULL", "READ"]},
-            {"q": "Which clause filters rows?", "a": "WHERE", "wrong": ["GROUP BY", "ORDER BY", "LIMIT"]},
-            {"q": "Which keyword combines tables?", "a": "JOIN", "wrong": ["PAIR", "MERGE", "LINK"]},
-            {"q": "Which function counts rows?", "a": "COUNT", "wrong": ["SUM", "AVG", "TOTAL"]},
-            {"q": "Which statement adds new row?", "a": "INSERT", "wrong": ["PUT", "CREATE", "APPEND"]},
-        ],
-    }
-
-    bank: dict[str, list[dict[str, Any]]] = {}
-    for subject, subject_templates in templates.items():
-        questions: list[dict[str, Any]] = []
-        for i in range(QUIZZES_PER_SUBJECT):
-            template = subject_templates[i % len(subject_templates)]
-            distractors = template["wrong"][:]
-            random.shuffle(distractors)
-            options = [template["a"], *distractors]
-            random.shuffle(options)
-            questions.append(
-                {
-                    "id": f"{subject}-{i + 1}",
-                    "q": f"[{subject} #{i + 1}] {template['q']}",
-                    "options": options,
-                    "a": template["a"],
-                }
-            )
-        bank[subject] = questions
-    return bank
+def cheat_sheets() -> None:
+    st.title("📘 Code Cheat Sheets")
+    tabs = st.tabs(LANGUAGES)
+    for idx, lang in enumerate(LANGUAGES):
+        with tabs[idx]:
+            st.markdown(CHEAT_SHEETS[lang])
 
 
-QUIZ_BANK = build_quiz_bank()
+def progress_tracker() -> None:
+    st.title("📈 Progress Tracker")
+    rows = []
+    for lang in LANGUAGES:
+        stats = st.session_state.progress[lang]
+        completion = int((stats["attempted"] / 100) * 100)
+        accuracy = int((stats["correct"] / stats["attempted"]) * 100) if stats["attempted"] else 0
+        rows.append(
+            {
+                "Language": lang,
+                "Attempted": stats["attempted"],
+                "Correct": stats["correct"],
+                "Remaining": len(stats["remaining"]),
+                "Completion %": completion,
+                "Accuracy %": accuracy,
+            }
+        )
+
+    st.dataframe(rows, use_container_width=True)
+
+    st.subheader("Recent quiz activity")
+    recent = []
+    for lang in LANGUAGES:
+        for item in st.session_state.progress[lang]["history"][-3:]:
+            recent.append({"Language": lang, **item})
+    if recent:
+        st.dataframe(recent[::-1], use_container_width=True)
+    else:
+        st.info("No quiz activity yet. Start answering questions to build your history.")
+
+
+def special_features() -> None:
+    st.title("✨ Special Features")
+
+    st.subheader("Daily Challenge")
+    challenge_lang = LANGUAGES[date.today().toordinal() % len(LANGUAGES)]
+    challenge_q = st.session_state.question_bank[challenge_lang][date.today().toordinal() % 100]
+    st.write(f"Today's language: **{challenge_lang}**")
+    st.write(challenge_q["question"])
+    with st.expander("Reveal answer"):
+        st.write(challenge_q["answer"])
+
+    st.subheader("Adaptive Recommendation")
+    weakest = None
+    weakest_acc = 101
+    for lang in LANGUAGES:
+        stats = st.session_state.progress[lang]
+        if stats["attempted"] == 0:
+            continue
+        acc = int((stats["correct"] / stats["attempted"]) * 100)
+        if acc < weakest_acc:
+            weakest_acc = acc
+            weakest = lang
+
+    if weakest:
+        st.warning(f"Focus suggestion: Review **{weakest}** (current accuracy: {weakest_acc}%).")
+    else:
+        st.info("Once you answer some questions, we will recommend your best next focus area.")
+
+    st.subheader("Achievement Badges")
+    total_correct = sum(st.session_state.progress[l]["correct"] for l in LANGUAGES)
+    badges = []
+    if total_correct >= 25:
+        badges.append("🥉 Bronze Solver")
+    if total_correct >= 75:
+        badges.append("🥈 Silver Solver")
+    if total_correct >= 150:
+        badges.append("🥇 Gold Solver")
+    if all(st.session_state.progress[l]["attempted"] >= 100 for l in LANGUAGES):
+        badges.append("🏆 Polyglot Master")
+
+    st.write(", ".join(badges) if badges else "No badges yet — start quizzing to unlock achievements!")
 
 
 def main() -> None:
     init_state()
-    db = init_firebase()
 
-    if not db:
-        st.stop()
-
-    if not st.session_state.logged_in:
-        login_signup(db)
-        st.stop()
-
-    username = st.session_state.username
-    user = get_user(db, username)
-    if not user:
-        st.error("Unable to load your account data.")
-        st.stop()
-
-    st.sidebar.title("🦜 CodeLingo Path")
-    subject = st.sidebar.selectbox("Subject", SUBJECTS)
-    menu = st.sidebar.radio(
-        "Menu",
-        ["Dashboard", "AI Assistant", "Flashcards", "Quizzes", "Notes", "Progress"],
+    st.sidebar.title("ALINEE Study App")
+    st.sidebar.caption("User-friendly coding learning dashboard")
+    page = st.sidebar.radio(
+        "Navigate",
+        ["Dashboard", "Quizzes", "Cheat Sheets", "Progress Tracker", "Special Features"],
     )
 
-    if st.sidebar.button("Logout", use_container_width=True):
-        st.session_state.logged_in = False
-        st.session_state.username = ""
-        st.rerun()
-
-    notes = user.get("notes", {})
-    scores = user.get("scores", {})
-    answered_quizzes = user.get("answered_quizzes", {})
-    answered_ids = set(answered_quizzes.get(subject, []))
-
-    if menu == "Dashboard":
-        st.title("🏆 Duolingo-Style Coding Dashboard")
-
-        flashcard_total = sum(len(flashcards.get(s, [])) for s in SUBJECTS)
-        best_scores_total = sum(int(scores.get(s, 0)) for s in SUBJECTS)
-        notes_nonempty = sum(1 for s in SUBJECTS if notes.get(s, "").strip())
-        xp_points = flashcard_total * 8 + best_scores_total * 15 + notes_nonempty * 20
-        streak = min(30, notes_nonempty + int(user.get("stats", {}).get("quizzes_taken", 0)))
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Subject Flashcards", len(subject_cards))
-        col2.metric("Best Quiz Score", scores.get(subject, 0))
-        col3.metric("XP", xp_points)
-        col4.metric("Current Streak", f"🔥 {streak} days")
-
-        path_completion = min(100, int((xp_points / 400) * 100))
-        st.progress(path_completion, text=f"Learning path completion: {path_completion}%")
-
-        st.subheader(f"{subject} Mission")
-        st.markdown(LESSON_NOTES.get(subject, ""))
-        st.info("Follow the path: Read notes ➜ Practice flashcards ➜ Take quiz ➜ Save your own notes.")
-
-   
-    elif menu == "Quizzes":
-        st.title("🎯 Quizzes")
-        questions = QUIZ_BANK.get(subject, [])
-        if not questions:
-            st.info("No quiz questions available.")
-        else:
-            current_batch = remaining[:QUIZ_BATCH_SIZE]
-            answers: dict[str, str] = {}
-            for idx, item in enumerate(current_batch, start=1):
-                st.markdown(f"**Q{idx}. {item['q']}**")
-                answers[item["id"]] = st.radio(
-                    f"Answer {idx}",
-                    item["options"],
-                    key=f"quiz_{subject}_{item['id']}",
-                )
-
-            if st.button("Submit Quiz Batch"):
-                score = 0
-                newly_answered = list(answered_ids)
-                for item in current_batch:
-                    if answers[item["id"]] == item["a"]:
-                        score += 1
-                    newly_answered.append(item["id"])
-
-                answered_quizzes[subject] = sorted(set(newly_answered))
-                scores[subject] = max(score, int(scores.get(subject, 0)))
-                update_user(
-                    db,
-                    username,
-                    {
-                        "answered_quizzes": answered_quizzes,
-                        "scores": scores,
-                    },
-                )
-                update_progress_stats(db, username, user, "quizzes_taken")
-                st.success(f"Batch score: {score}/{len(current_batch)}")
-                st.rerun()
-
-    elif menu == "Notes":
-        st.title("🗒️ Notes + Cheat Sheet")
-        st.markdown("#### Starter notes")
-        st.markdown(LESSON_NOTES.get(subject, ""))
-
-        current_notes = notes.get(subject, "")
-        new_notes = st.text_area("Write your notes", value=current_notes, height=280)
-        if st.button("Save Notes"):
-            notes[subject] = new_notes
-            update_user(db, username, {"notes": notes})
-            update_progress_stats(db, username, user, "notes_saved")
-            st.success("Notes saved successfully.")
-            current_notes = new_notes
-
-        st.markdown("#### Your saved notes")
-        if current_notes.strip():
-            st.markdown(current_notes)
-        else:
-            st.caption("No notes saved yet for this language.")
-
-    elif menu == "Progress":
-        st.title("📈 Progress Tracker")
-        stats = user.get("stats", {})
-
-        answered_total = sum(len(answered_quizzes.get(s, [])) for s in SUBJECTS)
-        notes_nonempty = sum(1 for s in SUBJECTS if notes.get(s, "").strip())
-        total_possible = QUIZZES_PER_SUBJECT * len(SUBJECTS)
-
-        completion = min(int((answered_total / total_possible) * 100) + notes_nonempty * 2, 100)
-        st.progress(completion, text=f"Overall completion: {completion}%")
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Answered Quizzes", f"{answered_total}/{total_possible}")
-        c2.metric("Subjects With Notes", f"{notes_nonempty}/{len(SUBJECTS)}")
-        c3.metric("Total Quiz Attempts", stats.get("quizzes_taken", 0))
-
-        st.subheader("Per-language completion")
-        for lang in SUBJECTS:
-            done = len(answered_quizzes.get(lang, []))
-            st.write(f"{lang}: {done}/{QUIZZES_PER_SUBJECT}")
-
-        st.subheader("Activity")
-        st.write(f"Quizzes taken: {stats.get('quizzes_taken', 0)}")
-        st.write(f"Notes saved: {stats.get('notes_saved', 0)}")
-        if stats.get("last_activity_utc"):
-            st.caption(f"Last activity (UTC): {stats['last_activity_utc']}")
+    if page == "Dashboard":
+        dashboard()
+    elif page == "Quizzes":
+        quizzes()
+    elif page == "Cheat Sheets":
+        cheat_sheets()
+    elif page == "Progress Tracker":
+        progress_tracker()
+    else:
+        special_features()
 
 
 if __name__ == "__main__":

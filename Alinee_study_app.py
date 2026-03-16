@@ -97,79 +97,6 @@ LANGUAGE_FACTS = {
     "Go": {"func": "func", "comment": "//", "runtime": "Compiled", "ext": ".go"},
 }
 
-
-def build_question_bank(language: str) -> list[dict]:
-    facts = LANGUAGE_FACTS[language]
-    rng = random.Random(language)
-    questions: list[dict] = []
-
-    for i in range(1, 101):
-        template_id = i % 10
-        if template_id == 0:
-            q = f"[{language} #{i}] Which file extension is most common for {language} source files?"
-            answer = facts["ext"]
-            options = [answer, ".txt", ".bin", ".data"]
-            explanation = f"{language} files are usually saved with {facts['ext']}."
-        elif template_id == 1:
-            q = f"[{language} #{i}] Which token is commonly used to start comments in {language}?"
-            answer = facts["comment"]
-            options = [answer, "%%", ";;", "@@"]
-            explanation = f"In {language}, `{facts['comment']}` is the common comment marker."
-        elif template_id == 2:
-            q = f"[{language} #{i}] Which option best describes {language}?"
-            answer = facts["runtime"]
-            options = [answer, "Markup language", "Version control system", "Operating system"]
-            explanation = f"Correct classification: {facts['runtime']}."
-        elif template_id == 3:
-            q = f"[{language} #{i}] Which function declaration keyword/pattern fits {language}?"
-            answer = facts["func"]
-            options = [answer, "lambda only", "define", "proc-start"]
-            explanation = f"`{facts['func']}` is associated with function declaration in {language}."
-        elif template_id == 4:
-            left = (i * 2) % 11
-            right = (i * 3) % 7
-            q = f"[{language} #{i}] In a basic arithmetic expression, what is {left} + {right}?"
-            answer = str(left + right)
-            options = [answer, str(left + right + 1), str(left + right - 1), str(left + right + 2)]
-            explanation = "Arithmetic fundamentals apply in every language."
-        elif template_id == 5:
-            loop_count = (i % 5) + 2
-            q = f"[{language} #{i}] A loop runs from 0 to {loop_count - 1}. How many iterations happen?"
-            answer = str(loop_count)
-            options = [answer, str(loop_count + 1), str(loop_count - 1), str(loop_count + 2)]
-            explanation = "A range from 0 to n-1 runs exactly n times."
-        elif template_id == 6:
-            q = f"[{language} #{i}] Which is a good coding habit in {language}?"
-            answer = "Use meaningful variable names"
-            options = [answer, "Write everything in one line", "Ignore formatting", "Skip testing"]
-            explanation = "Readable, maintainable code improves team productivity."
-        elif template_id == 7:
-            q = f"[{language} #{i}] What usually helps debug code fastest?"
-            answer = "Read error messages carefully"
-            options = [answer, "Delete random lines", "Restart repeatedly", "Avoid logs"]
-            explanation = "Error messages give direct clues for fixing issues."
-        elif template_id == 8:
-            q = f"[{language} #{i}] Which practice improves long-term mastery?"
-            answer = "Build small projects consistently"
-            options = [answer, "Memorize without practice", "Skip fundamentals", "Avoid documentation"]
-            explanation = "Consistent practice creates lasting skill growth."
-        else:
-            q = f"[{language} #{i}] Which statement is true about learning {language}?"
-            answer = "Practice + review beats cramming"
-            options = [answer, "One tutorial is always enough", "Syntax is everything", "Debugging is optional"]
-            explanation = "Spaced repetition and practice lead to better retention."
-
-        rng.shuffle(options)
-        questions.append(
-            {
-                "id": f"{language}-{i}",
-                "question": q,
-                "options": options,
-                "answer": answer,
-                "explanation": explanation,
-            }
-        )
-
     return questions
 
 
@@ -192,12 +119,6 @@ def init_state() -> None:
 
 def get_question(lang: str, qid: str) -> dict:
     return next(q for q in st.session_state.question_bank[lang] if q["id"] == qid)
-
-
-
-
-def normalize_answer(value: str) -> str:
-    return " ".join(value.strip().lower().split())
 
 
 def next_question(lang: str) -> dict | None:
@@ -346,7 +267,7 @@ def special_features() -> None:
     if st.button("Check Daily Challenge Answer"):
         if not user_answer.strip():
             st.warning("Please type an answer before checking.")
-        elif normalize_answer(user_answer) == normalize_answer(str(challenge_q["answer"])):
+        elif user_answer.strip() == challenge_q["answer"]:
             st.success("✅ Correct! Great job on today's challenge.")
         else:
             st.error(f"❌ Incorrect. Correct answer: {challenge_q['answer']}")

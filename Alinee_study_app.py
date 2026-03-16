@@ -391,34 +391,7 @@ def main() -> None:
         st.markdown(LESSON_NOTES.get(subject, ""))
         st.info("Follow the path: Read notes ➜ Practice flashcards ➜ Take quiz ➜ Save your own notes.")
 
-    elif menu == "AI Assistant":
-        render_ai_assistant(db, ai_ready, username, user, subject, flashcards, notes)
-
-    elif menu == "Flashcards":
-        st.title("📇 Flashcards")
-        with st.expander("Create a flashcard", expanded=True):
-            q_input = st.text_input("Question")
-            a_input = st.text_input("Answer")
-            if st.button("Save Flashcard"):
-                if not q_input.strip() or not a_input.strip():
-                    st.error("Both question and answer are required.")
-                else:
-                    subject_cards.append({"q": q_input.strip(), "a": a_input.strip()})
-                    flashcards[subject] = subject_cards
-                    update_user(db, username, {"flashcards": flashcards})
-                    update_progress_stats(db, username, user, "flashcards_created")
-                    st.success("Flashcard saved.")
-                    st.rerun()
-
-        st.subheader(f"Review {subject} flashcards")
-        if not subject_cards:
-            st.info("No flashcards yet for this subject.")
-        else:
-            for idx, card in enumerate(subject_cards, start=1):
-                with st.container(border=True):
-                    st.markdown(f"**Q{idx}:** {card['q']}")
-                    st.caption(card["a"])
-
+   
     elif menu == "Quizzes":
         st.title("🎯 Quizzes")
         questions = QUIZ_BANK.get(subject, [])

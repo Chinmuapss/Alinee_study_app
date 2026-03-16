@@ -95,8 +95,11 @@ LANGUAGE_FACTS = {
     "JavaScript": {"func": "function", "comment": "//", "runtime": "Interpreted/JIT", "ext": ".js"},
     "SQL": {"func": "CREATE PROCEDURE", "comment": "--", "runtime": "Query language", "ext": ".sql"},
     "Go": {"func": "func", "comment": "//", "runtime": "Compiled", "ext": ".go"},
-}
+
 def build_question_bank(lang):
+    facts = LANGUAGE_FACTS[lang]
+    questions = []
+    return questions
 
 
 def init_state() -> None:

@@ -8,42 +8,138 @@ import streamlit as st
 from firebase_admin import credentials, firestore
 
 st.set_page_config(page_title="CodeLingo by ALINEE", page_icon="🦜", layout="wide")
-
+QUIZZES_PER_SUBJECT = 5
 SUBJECTS = ["Python", "JavaScript", "Java", "C++", "SQL"]
-QUIZZES_PER_SUBJECT = 500
-QUIZ_BATCH_SIZE = 10
 
 LESSON_NOTES = {
     "Python": """### Python Quick Notes
-- Indentation defines code blocks.
-- Core types: `str`, `int`, `float`, `list`, `dict`, `set`, `tuple`.
-- Functions: `def name(args): return value`.
-- Loops: `for` and `while`.
+- **Syntax first:** indentation defines blocks.
+- **Core types:** `str`, `int`, `float`, `list`, `dict`, `set`, `tuple`.
+- **Loops:** `for item in items` and `while condition`.
+- **Functions:** `def name(args): return value`.
+- **Why Python?** Fast prototyping, AI/data work, scripting, backend APIs.
 """,
     "JavaScript": """### JavaScript Quick Notes
-- Runs in browser and Node.js.
-- Prefer `const`, then `let`.
-- Async with `Promise` and `async/await`.
-- Common in frontend and APIs.
+- Runs in the browser and on servers (Node.js).
+- **Variables:** `let`, `const` (prefer `const` by default).
+- **Functions:** normal, arrow `() => {}`.
+- **Async:** `Promise`, `async/await`.
+- **Why JavaScript?** Essential for web interactivity.
 """,
     "Java": """### Java Quick Notes
-- Strongly typed, class-based language.
-- Compiles to JVM bytecode.
-- Uses classes, objects, methods.
-- Popular in enterprise software.
+- Strongly typed, object-oriented language.
+- **Compile + run** on JVM.
+- **Classes/objects** are core building blocks.
+- **Collections:** `ArrayList`, `HashMap`.
+- **Why Java?** Enterprise systems and Android foundation.
 """,
     "C++": """### C++ Quick Notes
 - High-performance compiled language.
-- Supports OOP + generic programming.
-- STL includes `vector`, `map`, `string`.
-- Used in engines/systems.
+- Supports procedural + object-oriented + generic programming.
+- **Memory:** can use pointers and references.
+- **STL:** `vector`, `map`, `string`, algorithms.
+- **Why C++?** Games, systems, and performance-critical software.
 """,
     "SQL": """### SQL Quick Notes
-- Language for relational databases.
-- Core operations: `SELECT`, `INSERT`, `UPDATE`, `DELETE`.
+- Query language for relational databases.
+- Core commands: `SELECT`, `INSERT`, `UPDATE`, `DELETE`.
 - Filter with `WHERE`, combine with `JOIN`.
-- Aggregate with `COUNT`, `SUM`, `AVG`.
+- Aggregate with `COUNT`, `AVG`, `SUM`, grouped by `GROUP BY`.
+- **Why SQL?** Data retrieval and analytics everywhere.
 """,
+}
+
+QUIZ_BANK = {
+    "Python": [
+        {
+            "q": "Which keyword is used to define a function in Python?",
+            "options": ["function", "def", "fn", "lambda"],
+            "a": "def",
+        },
+        {
+            "q": "What data type is `[1, 2, 3]` in Python?",
+            "options": ["tuple", "set", "list", "dict"],
+            "a": "list",
+        },
+        {
+            "q": "How do you start a for loop over a list called `items`?",
+            "options": [
+                "for i to items",
+                "for i in items:",
+                "loop i in items",
+                "for(items)",
+            ],
+            "a": "for i in items:",
+        },
+    ],
+    "JavaScript": [
+        {
+            "q": "Which keyword cannot be reassigned?",
+            "options": ["var", "let", "const", "mutable"],
+            "a": "const",
+        },
+        {
+            "q": "Which syntax defines an arrow function?",
+            "options": ["function => {}", "() => {}", "->", "fn()"],
+            "a": "() => {}",
+        },
+        {
+            "q": "Which feature is used for asynchronous code in modern JavaScript?",
+            "options": ["sync/wait", "await/async", "pause/go", "thread.join"],
+            "a": "await/async",
+        },
+    ],
+    "Java": [
+        {
+            "q": "Java source code is compiled into what?",
+            "options": ["Machine code", "Bytecode", "Python", "HTML"],
+            "a": "Bytecode",
+        },
+        {
+            "q": "Which keyword creates a class instance?",
+            "options": ["create", "instance", "new", "init"],
+            "a": "new",
+        },
+        {
+            "q": "Which collection allows key-value pairs in Java?",
+            "options": ["ArrayList", "HashMap", "Stack", "Queue"],
+            "a": "HashMap",
+        },
+    ],
+    "C++": [
+        {
+            "q": "Which symbol is commonly used for a pointer declaration?",
+            "options": ["&", "*", "%", "#"],
+            "a": "*",
+        },
+        {
+            "q": "Which container is part of STL?",
+            "options": ["vector", "arraylist", "dictionary", "dataset"],
+            "a": "vector",
+        },
+        {
+            "q": "Why is C++ often used in game engines?",
+            "options": ["Low performance", "High performance", "No compilation", "Only web use"],
+            "a": "High performance",
+        },
+    ],
+    "SQL": [
+        {
+            "q": "Which SQL command retrieves data?",
+            "options": ["PULL", "GET", "SELECT", "FETCHROW"],
+            "a": "SELECT",
+        },
+        {
+            "q": "Which clause filters rows?",
+            "options": ["ORDER BY", "WHERE", "GROUP BY", "LIMIT"],
+            "a": "WHERE",
+        },
+        {
+            "q": "Which keyword combines rows from two tables?",
+            "options": ["MERGE", "JOIN", "PAIR", "UNION ONLY"],
+            "a": "JOIN",
+        },
+    ],
 }
 
 
@@ -257,8 +353,11 @@ def main() -> None:
         st.stop()
 
     st.sidebar.title("🦜 CodeLingo Path")
-    subject = st.sidebar.selectbox("Code Language", SUBJECTS)
-    menu = st.sidebar.radio("Menu", ["Dashboard", "Quizzes", "Notes", "Progress"])
+    subject = st.sidebar.selectbox("Subject", SUBJECTS)
+    menu = st.sidebar.radio(
+        "Menu",
+        ["Dashboard", "AI Assistant", "Flashcards", "Quizzes", "Notes", "Progress"],
+    )
 
     if st.sidebar.button("Logout", use_container_width=True):
         st.session_state.logged_in = False
@@ -273,27 +372,26 @@ def main() -> None:
     if menu == "Dashboard":
         st.title("🏆 Duolingo-Style Coding Dashboard")
 
-        answered_total = sum(len(answered_quizzes.get(s, [])) for s in SUBJECTS)
+        flashcard_total = sum(len(flashcards.get(s, [])) for s in SUBJECTS)
+        best_scores_total = sum(int(scores.get(s, 0)) for s in SUBJECTS)
         notes_nonempty = sum(1 for s in SUBJECTS if notes.get(s, "").strip())
-        xp_points = answered_total * 5 + notes_nonempty * 20
+        xp_points = flashcard_total * 8 + best_scores_total * 15 + notes_nonempty * 20
         streak = min(30, notes_nonempty + int(user.get("stats", {}).get("quizzes_taken", 0)))
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Answered Quizzes", len(answered_ids))
-        col2.metric("Best Batch Score", f"{scores.get(subject, 0)}/{QUIZ_BATCH_SIZE}")
+        col1.metric("Subject Flashcards", len(subject_cards))
+        col2.metric("Best Quiz Score", scores.get(subject, 0))
         col3.metric("XP", xp_points)
         col4.metric("Current Streak", f"🔥 {streak} days")
 
-        progress = int((len(answered_ids) / QUIZZES_PER_SUBJECT) * 100)
-        st.progress(progress, text=f"{subject} path completion: {progress}%")
-
-        remaining_subject = QUIZZES_PER_SUBJECT - len(answered_ids)
-        st.caption(f"{subject}: {len(answered_ids)} answered • {remaining_subject} remaining")
+        path_completion = min(100, int((xp_points / 400) * 100))
+        st.progress(path_completion, text=f"Learning path completion: {path_completion}%")
 
         st.subheader(f"{subject} Mission")
         st.markdown(LESSON_NOTES.get(subject, ""))
-        st.info("Path: Read notes ➜ Answer quizzes ➜ Save your own notes.")
+        st.info("Follow the path: Read notes ➜ Practice flashcards ➜ Take quiz ➜ Save your own notes.")
 
+   
     elif menu == "Quizzes":
         st.title("🎯 Quizzes")
         subject_quizzes = QUIZ_BANK.get(subject, [])

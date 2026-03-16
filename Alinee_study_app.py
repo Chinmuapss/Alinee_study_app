@@ -7,35 +7,138 @@ import firebase_admin
 import streamlit as st
 from firebase_admin import credentials, firestore
 
-st.set_page_config(page_title="ALINEE Study Hub", page_icon="📚", layout="wide")
+st.set_page_config(page_title="CodeLingo by ALINEE", page_icon="🦜", layout="wide")
 
-SUBJECTS = ["Math", "Science", "History", "English", "Geography"]
+SUBJECTS = ["Python", "JavaScript", "Java", "C++", "SQL"]
+
+LESSON_NOTES = {
+    "Python": """### Python Quick Notes
+- **Syntax first:** indentation defines blocks.
+- **Core types:** `str`, `int`, `float`, `list`, `dict`, `set`, `tuple`.
+- **Loops:** `for item in items` and `while condition`.
+- **Functions:** `def name(args): return value`.
+- **Why Python?** Fast prototyping, AI/data work, scripting, backend APIs.
+""",
+    "JavaScript": """### JavaScript Quick Notes
+- Runs in the browser and on servers (Node.js).
+- **Variables:** `let`, `const` (prefer `const` by default).
+- **Functions:** normal, arrow `() => {}`.
+- **Async:** `Promise`, `async/await`.
+- **Why JavaScript?** Essential for web interactivity.
+""",
+    "Java": """### Java Quick Notes
+- Strongly typed, object-oriented language.
+- **Compile + run** on JVM.
+- **Classes/objects** are core building blocks.
+- **Collections:** `ArrayList`, `HashMap`.
+- **Why Java?** Enterprise systems and Android foundation.
+""",
+    "C++": """### C++ Quick Notes
+- High-performance compiled language.
+- Supports procedural + object-oriented + generic programming.
+- **Memory:** can use pointers and references.
+- **STL:** `vector`, `map`, `string`, algorithms.
+- **Why C++?** Games, systems, and performance-critical software.
+""",
+    "SQL": """### SQL Quick Notes
+- Query language for relational databases.
+- Core commands: `SELECT`, `INSERT`, `UPDATE`, `DELETE`.
+- Filter with `WHERE`, combine with `JOIN`.
+- Aggregate with `COUNT`, `AVG`, `SUM`, grouped by `GROUP BY`.
+- **Why SQL?** Data retrieval and analytics everywhere.
+""",
+}
 
 QUIZ_BANK = {
-    "Math": [
-        {"q": "What is 8 × 7?", "options": ["54", "56", "64", "48"], "a": "56"},
-        {"q": "Solve: 15 + 27", "options": ["42", "41", "43", "40"], "a": "42"},
-        {"q": "What is the square root of 81?", "options": ["7", "8", "9", "10"], "a": "9"},
+    "Python": [
+        {
+            "q": "Which keyword is used to define a function in Python?",
+            "options": ["function", "def", "fn", "lambda"],
+            "a": "def",
+        },
+        {
+            "q": "What data type is `[1, 2, 3]` in Python?",
+            "options": ["tuple", "set", "list", "dict"],
+            "a": "list",
+        },
+        {
+            "q": "How do you start a for loop over a list called `items`?",
+            "options": [
+                "for i to items",
+                "for i in items:",
+                "loop i in items",
+                "for(items)",
+            ],
+            "a": "for i in items:",
+        },
     ],
-    "Science": [
-        {"q": "What gas do plants absorb from the air?", "options": ["Oxygen", "Nitrogen", "Carbon Dioxide", "Hydrogen"], "a": "Carbon Dioxide"},
-        {"q": "What is H2O commonly called?", "options": ["Salt", "Water", "Hydrogen", "Steam"], "a": "Water"},
-        {"q": "Which planet is known as the Red Planet?", "options": ["Earth", "Mars", "Jupiter", "Venus"], "a": "Mars"},
+    "JavaScript": [
+        {
+            "q": "Which keyword cannot be reassigned?",
+            "options": ["var", "let", "const", "mutable"],
+            "a": "const",
+        },
+        {
+            "q": "Which syntax defines an arrow function?",
+            "options": ["function => {}", "() => {}", "->", "fn()"],
+            "a": "() => {}",
+        },
+        {
+            "q": "Which feature is used for asynchronous code in modern JavaScript?",
+            "options": ["sync/wait", "await/async", "pause/go", "thread.join"],
+            "a": "await/async",
+        },
     ],
-    "History": [
-        {"q": "Who was the first President of the United States?", "options": ["George Washington", "Abraham Lincoln", "John Adams", "Thomas Jefferson"], "a": "George Washington"},
-        {"q": "In which year did World War II end?", "options": ["1942", "1945", "1939", "1950"], "a": "1945"},
-        {"q": "Which ancient civilization built the pyramids?", "options": ["Romans", "Greeks", "Egyptians", "Mayans"], "a": "Egyptians"},
+    "Java": [
+        {
+            "q": "Java source code is compiled into what?",
+            "options": ["Machine code", "Bytecode", "Python", "HTML"],
+            "a": "Bytecode",
+        },
+        {
+            "q": "Which keyword creates a class instance?",
+            "options": ["create", "instance", "new", "init"],
+            "a": "new",
+        },
+        {
+            "q": "Which collection allows key-value pairs in Java?",
+            "options": ["ArrayList", "HashMap", "Stack", "Queue"],
+            "a": "HashMap",
+        },
     ],
-    "English": [
-        {"q": "Choose the synonym of 'rapid'.", "options": ["Slow", "Quick", "Dull", "Late"], "a": "Quick"},
-        {"q": "Which is a proper noun?", "options": ["city", "school", "London", "river"], "a": "London"},
-        {"q": "Select the correct form: 'She ___ to school every day.'", "options": ["go", "goes", "gone", "going"], "a": "goes"},
+    "C++": [
+        {
+            "q": "Which symbol is commonly used for a pointer declaration?",
+            "options": ["&", "*", "%", "#"],
+            "a": "*",
+        },
+        {
+            "q": "Which container is part of STL?",
+            "options": ["vector", "arraylist", "dictionary", "dataset"],
+            "a": "vector",
+        },
+        {
+            "q": "Why is C++ often used in game engines?",
+            "options": ["Low performance", "High performance", "No compilation", "Only web use"],
+            "a": "High performance",
+        },
     ],
-    "Geography": [
-        {"q": "What is the largest continent?", "options": ["Africa", "Europe", "Asia", "Australia"], "a": "Asia"},
-        {"q": "Which ocean is the biggest?", "options": ["Atlantic", "Indian", "Arctic", "Pacific"], "a": "Pacific"},
-        {"q": "What is the capital of Japan?", "options": ["Seoul", "Tokyo", "Beijing", "Osaka"], "a": "Tokyo"},
+    "SQL": [
+        {
+            "q": "Which SQL command retrieves data?",
+            "options": ["PULL", "GET", "SELECT", "FETCHROW"],
+            "a": "SELECT",
+        },
+        {
+            "q": "Which clause filters rows?",
+            "options": ["ORDER BY", "WHERE", "GROUP BY", "LIMIT"],
+            "a": "WHERE",
+        },
+        {
+            "q": "Which keyword combines rows from two tables?",
+            "options": ["MERGE", "JOIN", "PAIR", "UNION ONLY"],
+            "a": "JOIN",
+        },
     ],
 }
 
@@ -202,7 +305,7 @@ def update_progress_stats(db: firestore.Client, username: str, user_data: dict[s
 
 
 def login_signup(db: firestore.Client) -> None:
-    st.title("📚 ALINEE Study Hub")
+    st.title("🦜 CodeLingo by ALINEE")
     st.subheader("Login or create your account")
 
     mode = st.radio("Account", ["Login", "Sign Up"], horizontal=True)
@@ -298,7 +401,7 @@ def main() -> None:
         st.error("Unable to load your account data.")
         st.stop()
 
-    st.sidebar.title("ALINEE Study Hub")
+    st.sidebar.title("🦜 CodeLingo Path")
     subject = st.sidebar.selectbox("Subject", SUBJECTS)
     menu = st.sidebar.radio(
         "Menu",
@@ -316,12 +419,26 @@ def main() -> None:
     subject_cards = flashcards.get(subject, [])
 
     if menu == "Dashboard":
-        st.title("📊 Dashboard")
-        col1, col2, col3 = st.columns(3)
+        st.title("🏆 Duolingo-Style Coding Dashboard")
+
+        flashcard_total = sum(len(flashcards.get(s, [])) for s in SUBJECTS)
+        best_scores_total = sum(int(scores.get(s, 0)) for s in SUBJECTS)
+        notes_nonempty = sum(1 for s in SUBJECTS if notes.get(s, "").strip())
+        xp_points = flashcard_total * 8 + best_scores_total * 15 + notes_nonempty * 20
+        streak = min(30, notes_nonempty + int(user.get("stats", {}).get("quizzes_taken", 0)))
+
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Subject Flashcards", len(subject_cards))
         col2.metric("Best Quiz Score", scores.get(subject, 0))
-        col3.metric("Saved Notes (chars)", len(notes.get(subject, "")))
-        st.info("Use the sidebar to study, ask AI, generate flashcards, take quizzes, and track progress.")
+        col3.metric("XP", xp_points)
+        col4.metric("Current Streak", f"🔥 {streak} days")
+
+        path_completion = min(100, int((xp_points / 400) * 100))
+        st.progress(path_completion, text=f"Learning path completion: {path_completion}%")
+
+        st.subheader(f"{subject} Mission")
+        st.markdown(LESSON_NOTES.get(subject, ""))
+        st.info("Follow the path: Read notes ➜ Practice flashcards ➜ Take quiz ➜ Save your own notes.")
 
     elif menu == "AI Assistant":
         render_ai_assistant(db, ai_ready, username, user, subject, flashcards, notes)
@@ -352,7 +469,7 @@ def main() -> None:
                     st.caption(card["a"])
 
     elif menu == "Quizzes":
-        st.title("📝 Quizzes")
+        st.title("🎯 Quizzes")
         questions = QUIZ_BANK.get(subject, [])
         if not questions:
             st.info("No quiz questions available.")
@@ -377,7 +494,10 @@ def main() -> None:
                         st.error(f"Q{idx + 1} correct answer: {item['a']}")
 
     elif menu == "Notes":
-        st.title("🗒️ Notes")
+        st.title("🗒️ Notes + Cheat Sheet")
+        st.markdown("#### Starter notes")
+        st.markdown(LESSON_NOTES.get(subject, ""))
+
         current_notes = notes.get(subject, "")
         new_notes = st.text_area("Write your notes", value=current_notes, height=280)
         if st.button("Save Notes"):

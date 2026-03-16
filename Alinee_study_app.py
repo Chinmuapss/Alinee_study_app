@@ -256,27 +256,34 @@ def progress_tracker() -> None:
         st.info("No quiz activity yet. Start answering questions to build your history.")
 
 
-def special_features() -> None:
+def special_features():
+
     st.title("✨ Special Features")
 
-    st.subheader("Daily Challenge")
     challenge_lang = LANGUAGES[date.today().toordinal() % len(LANGUAGES)]
-    challenge_q = st.session_state.question_bank[challenge_lang][date.today().toordinal() % 100]
-    st.write(f"Today's language: **{challenge_lang}**")
+
+    # Safely get a question
+    questions = st.session_state.question_bank[challenge_lang]
+
+    if not questions:
+        st.warning("Question bank not ready.")
+        return
+
+    index = date.today().toordinal() % len(questions)
+
+    challenge_q = questions[index]
+
+    st.write("Daily Challenge Language:", challenge_lang)
     st.write(challenge_q["question"])
 
-    user_answer = st.text_input(
-        "Type your daily challenge answer",
-        key=f"daily_answer_{challenge_q['id']}",
-        placeholder="Enter your answer here...",
-    )
-    if st.button("Check Daily Challenge Answer"):
-        if not user_answer.strip():
-            st.warning("Please type an answer before checking.")
-        elif user_answer.strip() == challenge_q["answer"]:
-            st.success("✅ Correct! Great job on today's challenge.")
+    user_answer = st.text_input("Your Answer")
+
+    if st.button("Check Answer"):
+
+        if user_answer.strip() == challenge_q["answer"]:
+            st.success("Correct!")
         else:
-            st.error(f"❌ Incorrect. Correct answer: {challenge_q['answer']}")
+            st.error(f"Wrong. Correct answer: {challenge_q['answer']}")
 
     st.subheader("Adaptive Recommendation")
     weakest = None

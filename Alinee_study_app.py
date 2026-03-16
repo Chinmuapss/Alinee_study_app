@@ -394,9 +394,13 @@ def main() -> None:
    
     elif menu == "Quizzes":
         st.title("🎯 Quizzes")
-        questions = QUIZ_BANK.get(subject, [])
-        if not questions:
-            st.info("No quiz questions available.")
+        subject_quizzes = QUIZ_BANK.get(subject, [])
+        remaining = [q for q in subject_quizzes if q["id"] not in answered_ids]
+
+        st.caption(f"Answered: {len(answered_ids)}/{QUIZZES_PER_SUBJECT} • Remaining: {len(remaining)}")
+
+        if not remaining:
+            st.success(f"You completed all {QUIZZES_PER_SUBJECT} {subject} quizzes 🎉")
         else:
             current_batch = remaining[:QUIZ_BATCH_SIZE]
             answers: dict[str, str] = {}

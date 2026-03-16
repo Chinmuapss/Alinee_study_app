@@ -1,8 +1,8 @@
 import hashlib
-import json
-import re
+import random
 from datetime import datetime, timezone
 from typing import Any
+
 import firebase_admin
 import streamlit as st
 from firebase_admin import credentials, firestore
@@ -147,9 +147,7 @@ def init_state() -> None:
     defaults = {
         "logged_in": False,
         "username": "",
-        "quiz_answers": {},
         "firebase_ready": False,
-        "ai_ready": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -174,53 +172,6 @@ def init_firebase() -> firestore.Client | None:
         return None
 
 
-def init_openai() -> bool:
-    # New AI engine is local and does not require external API keys.
-    st.session_state.ai_ready = True
-    return True
-
-
-def generate_offline_flashcards(topic: str, count: int) -> list[dict[str, str]]:
-    cards: list[dict[str, str]] = []
-    clean_topic = topic.strip().title()
-    for idx in range(1, count + 1):
-        cards.append(
-            {
-                "q": f"[{clean_topic}] Key concept #{idx}: what does it mean?",
-                "a": f"Concept #{idx} in {clean_topic} is a core idea. Define it, explain why it matters, and give one simple example.",
-            }
-        )
-    return cards
-
-
-def request_ai_completion(question: str, subject: str, notes_text: str) -> str:
-    q = question.strip().lower()
-
-    if "summary" in q and notes_text.strip():
-        preview = notes_text.strip()[:500]
-        return f"Here is a quick summary from your saved {subject} notes\n\n{preview}"
-
-    if "quiz" in q or "question" in q:
-        return (
-            f"Try this {subject} practice question:\n"
-            f"- Explain one important {subject} concept in 3 sentences and provide one real-life example."
-        )
-
-    if "flashcard" in q:
-        return (
-            f"For {subject}, strong flashcards are short and specific.\n"
-            "Template: Q: What is ___? A: ___ is ___ because ___."
-        )
-
-    return (
-        "Study tip: Use active recall + spaced repetition.\n"
-        f"For {subject}, do this now:\n"
-        "1) Review notes for 10 minutes\n"
-        "2) Answer 5 self-test questions\n"
-        "3) Teach the topic out loud in 2 minutes"
-    )
-
-
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
@@ -228,18 +179,29 @@ def hash_password(password: str) -> str:
 def verify_password(raw_password: str, stored_password: str) -> bool:
     if not stored_password:
         return False
-    # Backward compatible with legacy plain-text passwords.
     return stored_password == raw_password or stored_password == hash_password(raw_password)
 
 
 def safe_user_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    base = {"password": "", "flashcards": {}, "notes": {}, "scores": {}, "stats": {}}
+    base = {
+        "password": "",
+        "notes": {},
+        "scores": {},
+        "stats": {},
+        "answered_quizzes": {},
+    }
     if not payload:
         return base
+
     base.update(payload)
-    for key in ["flashcards", "notes", "scores", "stats"]:
+    for key in ["notes", "scores", "stats", "answered_quizzes"]:
         if not isinstance(base.get(key), dict):
             base[key] = {}
+
+    for subject in SUBJECTS:
+        answered_ids = base["answered_quizzes"].get(subject, [])
+        if not isinstance(answered_ids, list):
+            base["answered_quizzes"][subject] = []
     return base
 
 
@@ -271,30 +233,6 @@ def update_user(db: firestore.Client, username: str, data: dict[str, Any]) -> No
         db.collection("users").document(username).set(data, merge=True)
     except Exception as exc:
         st.error(f"Database update error: {exc}")
-
-
-def parse_ai_flashcards(raw_text: str) -> list[dict[str, str]]:
-    cards: list[dict[str, str]] = []
-
-    try:
-        decoded = json.loads(raw_text)
-        if isinstance(decoded, list):
-            for item in decoded:
-                if isinstance(item, dict) and item.get("question") and item.get("answer"):
-                    cards.append({"q": str(item["question"]).strip(), "a": str(item["answer"]).strip()})
-    except json.JSONDecodeError:
-        pass
-
-    if cards:
-        return cards
-
-    pattern = r"Q\s*:\s*(.+?)\s*A\s*:\s*(.+?)(?=\nQ\s*:|$)"
-    for match in re.finditer(pattern, raw_text, flags=re.DOTALL | re.IGNORECASE):
-        q = match.group(1).strip()
-        a = match.group(2).strip()
-        if q and a:
-            cards.append({"q": q, "a": a})
-    return cards
 
 
 def update_progress_stats(db: firestore.Client, username: str, user_data: dict[str, Any], action: str) -> None:
@@ -334,59 +272,72 @@ def login_signup(db: firestore.Client) -> None:
                 st.error("Invalid username or password.")
 
 
+def build_quiz_bank() -> dict[str, list[dict[str, Any]]]:
+    templates: dict[str, list[dict[str, Any]]] = {
+        "Python": [
+            {"q": "Which keyword defines a function in Python?", "a": "def", "wrong": ["function", "fn", "lambda"]},
+            {"q": "Which data type stores key-value pairs?", "a": "dict", "wrong": ["list", "tuple", "set"]},
+            {"q": "How do you start a loop over items?", "a": "for item in items:", "wrong": ["for(item)", "loop item items", "foreach items"]},
+            {"q": "Which keyword handles exceptions?", "a": "except", "wrong": ["catch", "rescue", "error"]},
+            {"q": "What value represents nothing?", "a": "None", "wrong": ["null", "nil", "empty"]},
+        ],
+        "JavaScript": [
+            {"q": "Which declaration cannot be reassigned?", "a": "const", "wrong": ["var", "let", "mutable"]},
+            {"q": "What syntax defines an arrow function?", "a": "() => {}", "wrong": ["function => {}", "->", "fn()"]},
+            {"q": "Which pair is used for async flows?", "a": "async/await", "wrong": ["wait/run", "pause/go", "sync/await"]},
+            {"q": "Which value means strict equality operator?", "a": "===", "wrong": ["==", "=", "=>"]},
+            {"q": "Which object usually logs to browser console?", "a": "console", "wrong": ["window", "screen", "document"]},
+        ],
+        "Java": [
+            {"q": "Java code compiles to what?", "a": "Bytecode", "wrong": ["Machine code", "Python", "HTML"]},
+            {"q": "Which keyword creates an object instance?", "a": "new", "wrong": ["create", "instance", "init"]},
+            {"q": "Which keyword defines inheritance?", "a": "extends", "wrong": ["inherits", "implements", "super"]},
+            {"q": "Which type stores true/false?", "a": "boolean", "wrong": ["bool", "bit", "binary"]},
+            {"q": "Which collection stores key-value pairs?", "a": "HashMap", "wrong": ["ArrayList", "Stack", "Queue"]},
+        ],
+        "C++": [
+            {"q": "Which symbol marks pointer declaration?", "a": "*", "wrong": ["&", "%", "#"]},
+            {"q": "Which namespace is standard library?", "a": "std", "wrong": ["cpp", "core", "lib"]},
+            {"q": "Which STL container is dynamic array?", "a": "vector", "wrong": ["map", "set", "queue"]},
+            {"q": "Which file extension is C++ header?", "a": ".hpp", "wrong": [".java", ".py", ".sql"]},
+            {"q": "What is C++ mainly known for?", "a": "High performance", "wrong": ["No compilation", "Only web", "Low speed"]},
+        ],
+        "SQL": [
+            {"q": "Which command retrieves records?", "a": "SELECT", "wrong": ["GET", "PULL", "READ"]},
+            {"q": "Which clause filters rows?", "a": "WHERE", "wrong": ["GROUP BY", "ORDER BY", "LIMIT"]},
+            {"q": "Which keyword combines tables?", "a": "JOIN", "wrong": ["PAIR", "MERGE", "LINK"]},
+            {"q": "Which function counts rows?", "a": "COUNT", "wrong": ["SUM", "AVG", "TOTAL"]},
+            {"q": "Which statement adds new row?", "a": "INSERT", "wrong": ["PUT", "CREATE", "APPEND"]},
+        ],
+    }
+
+    bank: dict[str, list[dict[str, Any]]] = {}
+    for subject, subject_templates in templates.items():
+        questions: list[dict[str, Any]] = []
+        for i in range(QUIZZES_PER_SUBJECT):
+            template = subject_templates[i % len(subject_templates)]
+            distractors = template["wrong"][:]
+            random.shuffle(distractors)
+            options = [template["a"], *distractors]
+            random.shuffle(options)
+            questions.append(
+                {
+                    "id": f"{subject}-{i + 1}",
+                    "q": f"[{subject} #{i + 1}] {template['q']}",
+                    "options": options,
+                    "a": template["a"],
+                }
+            )
+        bank[subject] = questions
+    return bank
 
 
-def render_ai_assistant(
-    db: firestore.Client,
-    ai_ready: bool,
-    username: str,
-    user: dict[str, Any],
-    subject: str,
-    flashcards: dict[str, list[dict[str, str]]],
-    notes: dict[str, str],
-) -> None:
-    st.title("🤖 AI Study Assistant")
-    st.caption("Ask questions and generate custom flashcards from your requested topic.")
+QUIZ_BANK = build_quiz_bank()
 
-    if not ai_ready:
-        st.warning("AI assistant is temporarily unavailable.")
-        return
-
-    subject_cards = flashcards.get(subject, [])
-    topic = st.text_input("Topic for flashcard generation", placeholder="e.g. Cell Biology")
-    count = st.slider("Number of flashcards", min_value=1, max_value=12, value=5)
-
-    if st.button("Generate AI Flashcards"):
-        if not topic.strip():
-            st.error("Please enter a topic.")
-        else:
-            with st.spinner("Generating flashcards..."):
-                cards = generate_offline_flashcards(topic, count)
-
-            subject_cards.extend(cards)
-            flashcards[subject] = subject_cards
-            update_user(db, username, {"flashcards": flashcards})
-            update_progress_stats(db, username, user, "ai_generations")
-            st.success(f"Saved {len(cards)} flashcards to {subject}.")
-
-    question = st.text_area("Ask any study question")
-    if st.button("Ask AI"):
-        if not question.strip():
-            st.error("Please enter a question.")
-        else:
-            with st.spinner("Thinking..."):
-                answer = request_ai_completion(
-                    question=question,
-                    subject=subject,
-                    notes_text=notes.get(subject, ""),
-                )
-            st.success(answer)
-            update_progress_stats(db, username, user, "ai_questions")
 
 def main() -> None:
     init_state()
     db = init_firebase()
-    ai_ready = init_openai()
 
     if not db:
         st.stop()
@@ -413,10 +364,10 @@ def main() -> None:
         st.session_state.username = ""
         st.rerun()
 
-    flashcards = user.get("flashcards", {})
     notes = user.get("notes", {})
     scores = user.get("scores", {})
-    subject_cards = flashcards.get(subject, [])
+    answered_quizzes = user.get("answered_quizzes", {})
+    answered_ids = set(answered_quizzes.get(subject, []))
 
     if menu == "Dashboard":
         st.title("🏆 Duolingo-Style Coding Dashboard")
@@ -474,24 +425,37 @@ def main() -> None:
         if not questions:
             st.info("No quiz questions available.")
         else:
-            answers: dict[int, str] = {}
-            for idx, item in enumerate(questions):
-                st.markdown(f"**Q{idx + 1}. {item['q']}**")
-                answers[idx] = st.radio(
-                    f"Answer {idx + 1}",
+            current_batch = remaining[:QUIZ_BATCH_SIZE]
+            answers: dict[str, str] = {}
+            for idx, item in enumerate(current_batch, start=1):
+                st.markdown(f"**Q{idx}. {item['q']}**")
+                answers[item["id"]] = st.radio(
+                    f"Answer {idx}",
                     item["options"],
-                    key=f"quiz_{subject}_{idx}",
+                    key=f"quiz_{subject}_{item['id']}",
                 )
 
-            if st.button("Submit Quiz"):
-                score = sum(1 for idx, item in enumerate(questions) if answers[idx] == item["a"])
+            if st.button("Submit Quiz Batch"):
+                score = 0
+                newly_answered = list(answered_ids)
+                for item in current_batch:
+                    if answers[item["id"]] == item["a"]:
+                        score += 1
+                    newly_answered.append(item["id"])
+
+                answered_quizzes[subject] = sorted(set(newly_answered))
                 scores[subject] = max(score, int(scores.get(subject, 0)))
-                update_user(db, username, {"scores": scores})
+                update_user(
+                    db,
+                    username,
+                    {
+                        "answered_quizzes": answered_quizzes,
+                        "scores": scores,
+                    },
+                )
                 update_progress_stats(db, username, user, "quizzes_taken")
-                st.success(f"Score: {score}/{len(questions)}")
-                for idx, item in enumerate(questions):
-                    if answers[idx] != item["a"]:
-                        st.error(f"Q{idx + 1} correct answer: {item['a']}")
+                st.success(f"Batch score: {score}/{len(current_batch)}")
+                st.rerun()
 
     elif menu == "Notes":
         st.title("🗒️ Notes + Cheat Sheet")
@@ -510,26 +474,24 @@ def main() -> None:
         st.title("📈 Progress Tracker")
         stats = user.get("stats", {})
 
-        flashcard_total = sum(len(flashcards.get(s, [])) for s in SUBJECTS)
-        best_scores_total = sum(int(scores.get(s, 0)) for s in SUBJECTS)
-        quizzes_total_questions = sum(len(QUIZ_BANK.get(s, [])) for s in SUBJECTS)
+        answered_total = sum(len(answered_quizzes.get(s, [])) for s in SUBJECTS)
         notes_nonempty = sum(1 for s in SUBJECTS if notes.get(s, "").strip())
+        total_possible = QUIZZES_PER_SUBJECT * len(SUBJECTS)
 
-        completion = min(
-            int((flashcard_total * 2 + best_scores_total * 5 + notes_nonempty * 10) / 5),
-            100,
-        )
-        st.progress(completion, text=f"Overall study completion: {completion}%")
+        completion = min(int((answered_total / total_possible) * 100) + notes_nonempty * 2, 100)
+        st.progress(completion, text=f"Overall completion: {completion}%")
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Flashcards", flashcard_total)
-        c2.metric("Best Quiz Points", f"{best_scores_total}/{quizzes_total_questions}")
-        c3.metric("Subjects With Notes", f"{notes_nonempty}/{len(SUBJECTS)}")
+        c1.metric("Answered Quizzes", f"{answered_total}/{total_possible}")
+        c2.metric("Subjects With Notes", f"{notes_nonempty}/{len(SUBJECTS)}")
+        c3.metric("Total Quiz Attempts", stats.get("quizzes_taken", 0))
+
+        st.subheader("Per-language completion")
+        for lang in SUBJECTS:
+            done = len(answered_quizzes.get(lang, []))
+            st.write(f"{lang}: {done}/{QUIZZES_PER_SUBJECT}")
 
         st.subheader("Activity")
-        st.write(f"AI questions asked: {stats.get('ai_questions', 0)}")
-        st.write(f"AI generations: {stats.get('ai_generations', 0)}")
-        st.write(f"Flashcards created: {stats.get('flashcards_created', 0)}")
         st.write(f"Quizzes taken: {stats.get('quizzes_taken', 0)}")
         st.write(f"Notes saved: {stats.get('notes_saved', 0)}")
         if stats.get("last_activity_utc"):

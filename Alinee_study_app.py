@@ -103,9 +103,12 @@ def build_question_bank(lang):
     return questions
 
 
-def init_state() -> None:
+def init_state():
+
     if "question_bank" not in st.session_state:
-        st.session_state.question_bank = {lang: build_question_bank(lang) for lang in LANGUAGES}
+        st.session_state.question_bank = {
+            lang: build_question_bank(lang) for lang in LANGUAGES
+        }
 
     if "progress" not in st.session_state:
         st.session_state.progress = {
@@ -113,12 +116,10 @@ def init_state() -> None:
                 "remaining": [q["id"] for q in st.session_state.question_bank[lang]],
                 "current": None,
                 "attempted": 0,
-                "correct": 0,
-                "history": [],
+                "correct": 0
             }
             for lang in LANGUAGES
         }
-
 
 
 def get_questions():
@@ -260,13 +261,17 @@ def special_features():
 
     st.title("✨ Special Features")
 
+    # Ensure question bank exists
+    if "question_bank" not in st.session_state:
+        st.warning("System is loading... please refresh.")
+        return
+
     challenge_lang = LANGUAGES[date.today().toordinal() % len(LANGUAGES)]
 
-    # Safely get a question
-    questions = st.session_state.question_bank[challenge_lang]
+    questions = st.session_state.question_bank.get(challenge_lang, [])
 
-    if not questions:
-        st.warning("Question bank not ready.")
+    if len(questions) == 0:
+        st.warning("No questions found. Please refresh the app.")
         return
 
     index = date.today().toordinal() % len(questions)
@@ -317,14 +322,14 @@ def special_features():
     st.write(", ".join(badges) if badges else "No badges yet — start quizzing to unlock achievements!")
 
 
-def main() -> None:
-    init_state()
+def main():
+    init_state()   # <-- THIS MUST BE FIRST
 
     st.sidebar.title("ALINEE Study App")
-    st.sidebar.caption("User-friendly coding learning dashboard")
+
     page = st.sidebar.radio(
         "Navigate",
-        ["Dashboard", "Quizzes", "Cheat Sheets", "Progress Tracker", "Special Features"],
+        ["Dashboard","Quizzes","Cheat Sheets","Progress Tracker","Special Features"]
     )
 
     if page == "Dashboard":

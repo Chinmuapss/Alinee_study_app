@@ -1,5 +1,6 @@
 import random
 from datetime import date
+from typing import Any
 
 import streamlit as st
 
@@ -14,11 +15,9 @@ CHEAT_SHEETS = {
 # variables
 name = "ALINEE"
 
-# function
 def greet(user: str) -> str:
     return f"Hello, {user}!"
 
-# loop
 for i in range(3):
     print(i)
 ```
@@ -89,26 +88,134 @@ func main() {
 }
 
 LANGUAGE_FACTS = {
-    "Python": {"func": "def", "comment": "#", "runtime": "Interpreted", "ext": ".py"},
-    "Java": {"func": "public static", "comment": "//", "runtime": "Compiled to bytecode", "ext": ".java"},
-    "C++": {"func": "int", "comment": "//", "runtime": "Compiled", "ext": ".cpp"},
-    "JavaScript": {"func": "function", "comment": "//", "runtime": "Interpreted/JIT", "ext": ".js"},
-    "SQL": {"func": "CREATE PROCEDURE", "comment": "--", "runtime": "Query language", "ext": ".sql"},
-    "Go": {"func": "func", "comment": "//", "runtime": "Compiled", "ext": ".go"},
+    "Python": {
+        "func": "def",
+        "comment": "#",
+        "runtime": "Interpreted",
+        "ext": ".py",
+        "creator": "Guido van Rossum",
+    },
+    "Java": {
+        "func": "public static",
+        "comment": "//",
+        "runtime": "Compiled to bytecode",
+        "ext": ".java",
+        "creator": "James Gosling",
+    },
+    "C++": {
+        "func": "int",
+        "comment": "//",
+        "runtime": "Compiled",
+        "ext": ".cpp",
+        "creator": "Bjarne Stroustrup",
+    },
+    "JavaScript": {
+        "func": "function",
+        "comment": "//",
+        "runtime": "Interpreted/JIT",
+        "ext": ".js",
+        "creator": "Brendan Eich",
+    },
+    "SQL": {
+        "func": "CREATE PROCEDURE",
+        "comment": "--",
+        "runtime": "Query language",
+        "ext": ".sql",
+        "creator": "Donald Chamberlin and Raymond Boyce",
+    },
+    "Go": {
+        "func": "func",
+        "comment": "//",
+        "runtime": "Compiled",
+        "ext": ".go",
+        "creator": "Robert Griesemer, Rob Pike, and Ken Thompson",
+    },
 }
 
-def build_question_bank(lang):
+TOPICS = {
+    "Python": ["Functions", "Lists", "Dictionaries", "Loops", "Modules", "Classes", "Exceptions", "Comprehensions", "Typing", "File I/O"],
+    "Java": ["Classes", "Objects", "Interfaces", "Inheritance", "Collections", "Exceptions", "Threads", "Generics", "JVM", "Streams"],
+    "C++": ["Pointers", "References", "Templates", "STL", "OOP", "Memory", "RAII", "Namespaces", "Vectors", "Algorithms"],
+    "JavaScript": ["DOM", "Promises", "Closures", "Arrays", "Objects", "Events", "Async/Await", "Modules", "Scope", "Fetch API"],
+    "SQL": ["SELECT", "JOIN", "GROUP BY", "HAVING", "ORDER BY", "INDEX", "PRIMARY KEY", "FOREIGN KEY", "Transactions", "Views"],
+    "Go": ["Goroutines", "Channels", "Structs", "Interfaces", "Slices", "Maps", "Error Handling", "Packages", "Testing", "Concurrency"],
+}
+
+
+def shuffled_options(correct: str, pool: list[str], seed: int) -> list[str]:
+    rnd = random.Random(seed)
+    options = [correct]
+    for choice in pool:
+        if choice != correct and choice not in options:
+            options.append(choice)
+        if len(options) == 4:
+            break
+    while len(options) < 4:
+        options.append(f"Option {len(options)+1}")
+    rnd.shuffle(options)
+    return options
+
+
+def build_question_bank(lang: str) -> list[dict[str, Any]]:
     facts = LANGUAGE_FACTS[lang]
-    questions = []
+    other_comments = [LANGUAGE_FACTS[l]["comment"] for l in LANGUAGES if l != lang]
+    other_exts = [LANGUAGE_FACTS[l]["ext"] for l in LANGUAGES if l != lang]
+    other_runtime = [LANGUAGE_FACTS[l]["runtime"] for l in LANGUAGES if l != lang]
+    other_func = [LANGUAGE_FACTS[l]["func"] for l in LANGUAGES if l != lang]
+    topics = TOPICS[lang]
+
+    questions: list[dict[str, Any]] = []
+    qid = 1
+    for topic in topics:
+        for variant in range(10):
+            mode = variant % 5
+            if mode == 0:
+                answer = facts["comment"]
+                options = shuffled_options(answer, other_comments, qid)
+                question = f"[{topic}] In {lang}, what symbol starts a single-line comment?"
+                explanation = f"{lang} uses `{answer}` for single-line comments."
+            elif mode == 1:
+                answer = facts["ext"]
+                options = shuffled_options(answer, other_exts, qid)
+                question = f"[{topic}] Which file extension is standard for {lang} source files?"
+                explanation = f"The standard source file extension for {lang} is `{answer}`."
+            elif mode == 2:
+                answer = facts["runtime"]
+                options = shuffled_options(answer, other_runtime, qid)
+                question = f"[{topic}] How is {lang} generally executed?"
+                explanation = f"{lang} is generally described as: {answer}."
+            elif mode == 3:
+                answer = facts["func"]
+                options = shuffled_options(answer, other_func, qid)
+                question = f"[{topic}] Which keyword/pattern is commonly used to declare functions in {lang}?"
+                explanation = f"A common function declaration keyword/pattern in {lang} is `{answer}`."
+            else:
+                answer = facts["creator"]
+                creator_pool = [LANGUAGE_FACTS[l]["creator"] for l in LANGUAGES if l != lang]
+                options = shuffled_options(answer, creator_pool, qid)
+                question = f"[{topic}] Who is most associated with creating {lang}?"
+                explanation = f"{lang} is most associated with {answer}."
+
+            questions.append(
+                {
+                    "id": f"{lang}-{qid}",
+                    "question": f"Q{qid:03d} {question}",
+                    "options": options,
+                    "answer": answer,
+                    "explanation": explanation,
+                }
+            )
+            qid += 1
     return questions
 
 
-def init_state():
+def get_question(lang: str, qid: str) -> dict[str, Any] | None:
+    return next((q for q in st.session_state.question_bank[lang] if q["id"] == qid), None)
 
+
+def init_state() -> None:
     if "question_bank" not in st.session_state:
-        st.session_state.question_bank = {
-            lang: build_question_bank(lang) for lang in LANGUAGES
-        }
+        st.session_state.question_bank = {lang: build_question_bank(lang) for lang in LANGUAGES}
 
     if "progress" not in st.session_state:
         st.session_state.progress = {
@@ -116,26 +223,42 @@ def init_state():
                 "remaining": [q["id"] for q in st.session_state.question_bank[lang]],
                 "current": None,
                 "attempted": 0,
-                "correct": 0
+                "correct": 0,
+                "history": [],
             }
             for lang in LANGUAGES
         }
 
+    if "daily_challenge" not in st.session_state:
+        all_ids = [(lang, q["id"]) for lang in LANGUAGES for q in st.session_state.question_bank[lang]]
+        random.shuffle(all_ids)
+        st.session_state.daily_challenge = {
+            "date": date.today().isoformat(),
+            "remaining": all_ids[:30],
+            "score": 0,
+            "attempted": 0,
+        }
 
-def get_questions():
-    questions = []
 
-    return questions
-
-
-def next_question(lang: str) -> dict | None:
+def next_question(lang: str) -> dict[str, Any] | None:
     data = st.session_state.progress[lang]
     if not data["remaining"]:
         data["current"] = None
         return None
+
     chosen = random.choice(data["remaining"])
     data["current"] = chosen
     return get_question(lang, chosen)
+
+
+def reset_language(lang: str) -> None:
+    st.session_state.progress[lang] = {
+        "remaining": [q["id"] for q in st.session_state.question_bank[lang]],
+        "current": None,
+        "attempted": 0,
+        "correct": 0,
+        "history": [],
+    }
 
 
 def dashboard() -> None:
@@ -168,25 +291,14 @@ def quizzes() -> None:
     lang = st.selectbox("Choose language", LANGUAGES)
     data = st.session_state.progress[lang]
 
-    st.caption(
-        f"{lang}: {data['attempted']}/100 attempted • {data['correct']} correct • {len(data['remaining'])} left"
-    )
+    st.caption(f"{lang}: {data['attempted']}/100 attempted • {data['correct']} correct • {len(data['remaining'])} left")
 
-    if data["current"] is None:
-        question = next_question(lang)
-    else:
-        question = get_question(lang, data["current"])
+    question = next_question(lang) if data["current"] is None else get_question(lang, data["current"])
 
     if question is None:
         st.success("Amazing! You completed all 100 questions for this language with no repeats.")
         if st.button("Reset this language quiz"):
-            st.session_state.progress[lang] = {
-                "remaining": [q["id"] for q in st.session_state.question_bank[lang]],
-                "current": None,
-                "attempted": 0,
-                "correct": 0,
-                "history": [],
-            }
+            reset_language(lang)
             st.rerun()
         return
 
@@ -213,133 +325,98 @@ def quizzes() -> None:
         else:
             st.error(f"Not quite. Correct answer: {question['answer']}")
         st.info(question["explanation"])
+        st.rerun()
 
-        if st.button("Next question"):
-            st.rerun()
+    if data["history"]:
+        with st.expander("Recent answers"):
+            st.dataframe(data["history"][-8:], use_container_width=True)
 
 
 def cheat_sheets() -> None:
     st.title("📘 Code Cheat Sheets")
-    tabs = st.tabs(LANGUAGES)
-    for idx, lang in enumerate(LANGUAGES):
-        with tabs[idx]:
-            st.markdown(CHEAT_SHEETS[lang])
+    lang = st.selectbox("Pick a language", LANGUAGES, key="cheat_sheet_lang")
+    st.markdown(CHEAT_SHEETS[lang])
 
 
-def progress_tracker() -> None:
-    st.title("📈 Progress Tracker")
-    rows = []
-    for lang in LANGUAGES:
-        stats = st.session_state.progress[lang]
-        completion = int((stats["attempted"] / 100) * 100)
-        accuracy = int((stats["correct"] / stats["attempted"]) * 100) if stats["attempted"] else 0
-        rows.append(
-            {
-                "Language": lang,
-                "Attempted": stats["attempted"],
-                "Correct": stats["correct"],
-                "Remaining": len(stats["remaining"]),
-                "Completion %": completion,
-                "Accuracy %": accuracy,
-            }
-        )
-
-    st.dataframe(rows, use_container_width=True)
-
-    st.subheader("Recent quiz activity")
-    recent = []
-    for lang in LANGUAGES:
-        for item in st.session_state.progress[lang]["history"][-3:]:
-            recent.append({"Language": lang, **item})
-    if recent:
-        st.dataframe(recent[::-1], use_container_width=True)
-    else:
-        st.info("No quiz activity yet. Start answering questions to build your history.")
-
-
-def special_features():
-
+def special_features() -> None:
     st.title("✨ Special Features")
 
-    # Ensure question bank exists
-    if "question_bank" not in st.session_state:
-        st.warning("System is loading... please refresh.")
-        return
+    tab1, tab2 = st.tabs(["🎯 Daily Mixed Challenge", "🧪 Code Recall Challenge"])
 
-    challenge_lang = LANGUAGES[date.today().toordinal() % len(LANGUAGES)]
+    with tab1:
+        st.write("Answer mixed questions from all technologies. Questions are not repeated once answered.")
+        dc = st.session_state.daily_challenge
+        st.caption(f"Date: {dc['date']} • Attempted: {dc['attempted']} • Score: {dc['score']} • Remaining: {len(dc['remaining'])}")
 
-    questions = st.session_state.question_bank.get(challenge_lang, [])
-
-    if len(questions) == 0:
-        st.warning("No questions found. Please refresh the app.")
-        return
-
-    index = date.today().toordinal() % len(questions)
-
-    challenge_q = questions[index]
-
-    st.write("Daily Challenge Language:", challenge_lang)
-    st.write(challenge_q["question"])
-
-    user_answer = st.text_input("Your Answer")
-
-    if st.button("Check Answer"):
-
-        if user_answer.strip() == challenge_q["answer"]:
-            st.success("Correct!")
+        if dc["remaining"]:
+            lang, qid = dc["remaining"][0]
+            q = get_question(lang, qid)
+            st.markdown(f"**{lang}** — {q['question']}")
+            pick = st.radio("Your answer", q["options"], key=f"daily_{qid}")
+            if st.button("Submit daily answer"):
+                dc["attempted"] += 1
+                if pick == q["answer"]:
+                    dc["score"] += 1
+                    st.success("Great! Correct answer.")
+                else:
+                    st.error(f"Incorrect. Correct answer: {q['answer']}")
+                dc["remaining"].pop(0)
+                st.rerun()
         else:
-            st.error(f"Wrong. Correct answer: {challenge_q['answer']}")
+            st.success("Daily challenge complete! Come back tomorrow for a refreshed set.")
 
-    st.subheader("Adaptive Recommendation")
-    weakest = None
-    weakest_acc = 101
-    for lang in LANGUAGES:
-        stats = st.session_state.progress[lang]
-        if stats["attempted"] == 0:
-            continue
-        acc = int((stats["correct"] / stats["attempted"]) * 100)
-        if acc < weakest_acc:
-            weakest_acc = acc
-            weakest = lang
-
-    if weakest:
-        st.warning(f"Focus suggestion: Review **{weakest}** (current accuracy: {weakest_acc}%).")
-    else:
-        st.info("Once you answer some questions, we will recommend your best next focus area.")
-
-    st.subheader("Achievement Badges")
-    total_correct = sum(st.session_state.progress[l]["correct"] for l in LANGUAGES)
-    badges = []
-    if total_correct >= 25:
-        badges.append("🥉 Bronze Solver")
-    if total_correct >= 75:
-        badges.append("🥈 Silver Solver")
-    if total_correct >= 150:
-        badges.append("🥇 Gold Solver")
-    if all(st.session_state.progress[l]["attempted"] >= 100 for l in LANGUAGES):
-        badges.append("🏆 Polyglot Master")
-
-    st.write(", ".join(badges) if badges else "No badges yet — start quizzing to unlock achievements!")
+    with tab2:
+        st.write("Type your answer for quick recall drills.")
+        lang = st.selectbox("Language", LANGUAGES, key="recall_lang")
+        prompts = {
+            "comment": f"Type the single-line comment symbol for {lang}.",
+            "ext": f"Type the standard file extension for {lang} source files.",
+            "func": f"Type the common function keyword/pattern in {lang}.",
+        }
+        recall_type = st.radio("Prompt type", list(prompts.keys()), format_func=lambda x: x.upper())
+        st.info(prompts[recall_type])
+        user_input = st.text_input("Your answer")
+        if st.button("Check recall answer"):
+            expected = LANGUAGE_FACTS[lang][recall_type].strip().lower()
+            if user_input.strip().lower() == expected:
+                st.success("Excellent memory! ✅")
+            else:
+                st.warning(f"Almost there. Expected answer: {LANGUAGE_FACTS[lang][recall_type]}")
 
 
-def main():
-    init_state()   # <-- THIS MUST BE FIRST
+def main() -> None:
+    init_state()
 
-    st.sidebar.title("ALINEE Study App")
-
+    st.sidebar.title("📚 ALINEE Study App")
     page = st.sidebar.radio(
         "Navigate",
-        ["Dashboard","Quizzes","Cheat Sheets","Progress Tracker","Special Features"]
+        ["Dashboard", "Progress Tracker", "Cheat Sheets", "Quizzes", "Special Features"],
     )
+
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Reset all progress"):
+        for lang in LANGUAGES:
+            reset_language(lang)
+        st.session_state.daily_challenge = {
+            "date": date.today().isoformat(),
+            "remaining": random.sample(
+                [(l, q["id"]) for l in LANGUAGES for q in st.session_state.question_bank[l]],
+                k=30,
+            ),
+            "score": 0,
+            "attempted": 0,
+        }
+        st.sidebar.success("All progress reset.")
+        st.rerun()
 
     if page == "Dashboard":
         dashboard()
-    elif page == "Quizzes":
-        quizzes()
+    elif page == "Progress Tracker":
+        dashboard()
     elif page == "Cheat Sheets":
         cheat_sheets()
-    elif page == "Progress Tracker":
-        progress_tracker()
+    elif page == "Quizzes":
+        quizzes()
     else:
         special_features()
 

@@ -442,6 +442,13 @@ def main() -> None:
             update_user(db, username, {"notes": notes})
             update_progress_stats(db, username, user, "notes_saved")
             st.success("Notes saved successfully.")
+            current_notes = new_notes
+
+        st.markdown("#### Your saved notes")
+        if current_notes.strip():
+            st.markdown(current_notes)
+        else:
+            st.caption("No notes saved yet for this language.")
 
     elif menu == "Progress":
         st.title("📈 Progress Tracker")

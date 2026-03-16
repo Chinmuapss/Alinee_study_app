@@ -97,6 +97,8 @@ LANGUAGE_FACTS = {
     "Go": {"func": "func", "comment": "//", "runtime": "Compiled", "ext": ".go"},
 }
 
+    return questions
+
 
 def build_question_bank(language: str) -> list[dict]:
     """Generate 100 deterministic quiz questions for a language."""
@@ -191,14 +193,11 @@ def init_state() -> None:
         }
 
 
-def get_question(lang: str, qid: str) -> dict:
-    return next(q for q in st.session_state.question_bank[lang] if q["id"] == qid)
 
+def get_questions():
+    questions = []
 
-
-
-def normalize_answer(value: str) -> str:
-    return " ".join(value.strip().lower().split())
+    return questions
 
 
 def next_question(lang: str) -> dict | None:
@@ -347,7 +346,7 @@ def special_features() -> None:
     if st.button("Check Daily Challenge Answer"):
         if not user_answer.strip():
             st.warning("Please type an answer before checking.")
-        elif normalize_answer(user_answer) == normalize_answer(str(challenge_q["answer"])):
+        elif user_answer.strip() == challenge_q["answer"]:
             st.success("✅ Correct! Great job on today's challenge.")
         else:
             st.error(f"❌ Incorrect. Correct answer: {challenge_q['answer']}")

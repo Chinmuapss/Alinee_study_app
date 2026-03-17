@@ -1,364 +1,419 @@
-import base64
 import hashlib
-import io
+import json
+import random
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
-import speech_recognition as sr
 import streamlit as st
-from deep_translator import GoogleTranslator
-from pydub import AudioSegment, effects
-from supabase import Client, create_client
 
 
-st.set_page_config("JounaCord Studio", page_icon="🎙️", layout="wide")
+st.set_page_config(page_title="CodeMaster Study Hub", page_icon="📚", layout="wide")
+
+DB_PATH = Path("codemaster.db")
+LANGUAGES = ["Python", "Java", "C++", "JavaScript", "Go", "Rust"]
+SPECIAL_FEATURES = ["Daily Challenge", "Debug Sprint", "Interview Prep", "Speed Round"]
 
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-@st.cache_resource
-def init_supabase() -> Client:
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["anon_key"]
-    return create_client(url, key)
+def slugify(value: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "_" for ch in value).strip("_")
 
 
-try:
-    supabase = init_supabase()
-except Exception as exc:
-    st.error(f"Supabase initialization failed. Add valid supabase secrets to run the app: {exc}")
-    st.stop()
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def create_user(username: str, password: str) -> tuple[bool, str]:
-    existing = (
-        supabase.table("profiles")
-        .select("id")
-        .eq("username", username)
-        .limit(1)
-        .execute()
-    )
-    if existing.data:
-        return False, "Username already exists. Please choose another username."
-
-    auth_response = supabase.auth.sign_up(
-        {
-            "email": f"{username}@jounacord.local",
-            "password": password,
-            "options": {
-                "data": {
-                    "username": username,
-                }
-            },
-        }
-    )
-
-    user = auth_response.user
-    if not user:
-        return False, "Unable to create account. Please try again."
-
-    supabase.table("profiles").upsert(
-        {
-            "id": user.id,
-            "username": username,
-            "password_hash": hash_password(password),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).execute()
-
-    return True, "Account created successfully. Please log in."
+def get_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def authenticate_user(username: str, password: str) -> tuple[bool, str | None]:
-    profile = (
-        supabase.table("profiles")
-        .select("id,password_hash")
-        .eq("username", username)
-        .limit(1)
-        .execute()
-    )
-
-    if not profile.data:
-        return False, None
-
-    row = profile.data[0]
-    if row.get("password_hash") != hash_password(password):
-        return False, None
-
-    user_id = row["id"]
-    return True, user_id
-
-
-def audiosegment_to_bytes(audio: AudioSegment, export_format: str = "mp3") -> bytes:
-    export_buffer = io.BytesIO()
-    audio.export(export_buffer, format=export_format)
-    return export_buffer.getvalue()
-
-
-def transcribe_and_translate(audio: AudioSegment, source_lang: str, target_lang: str) -> tuple[str, str]:
-    try:
-        wav_io = io.BytesIO()
-        audio.set_channels(1).set_frame_rate(16000).export(wav_io, format="wav")
-        wav_io.seek(0)
-
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_io) as source:
-            recorded_audio = recognizer.record(source)
-
-        transcript = recognizer.recognize_google(recorded_audio, language=source_lang)
-    except Exception as exc:
-        transcript = f"[Transcription failed: {exc}]"
-
-    try:
-        translation = GoogleTranslator(source=source_lang, target=target_lang).translate(transcript)
-    except Exception as exc:
-        translation = f"[Translation failed: {exc}]"
-
-    return transcript, translation
-
-
-def overlay_or_replace_segment(
-    audio: AudioSegment,
-    start_ms: int,
-    end_ms: int,
-    replacement_audio: AudioSegment | None,
-) -> AudioSegment:
-    if start_ms >= end_ms:
-        return audio
-
-    if replacement_audio is None:
-        replacement_segment = AudioSegment.silent(duration=end_ms - start_ms)
-    else:
-        replacement_segment = replacement_audio.set_channels(audio.channels).set_frame_rate(audio.frame_rate)
-        replacement_segment = replacement_segment[: end_ms - start_ms]
-        if len(replacement_segment) < end_ms - start_ms:
-            replacement_segment += AudioSegment.silent(duration=(end_ms - start_ms) - len(replacement_segment))
-
-    return audio[:start_ms] + replacement_segment + audio[end_ms:]
-
-
-def apply_audio_edits(
-    audio: AudioSegment,
-    enhance_audio: bool,
-    speed_factor: float,
-    replace_segment: bool,
-    replace_start_sec: float,
-    replace_end_sec: float,
-    replacement_audio: AudioSegment | None,
-    trim_start_sec: float,
-    trim_end_sec: float,
-    reverse_audio: bool,
-) -> AudioSegment:
-    edited = audio
-
-    if enhance_audio:
-        edited = effects.normalize(edited)
-        edited = edited.high_pass_filter(100)
-        edited = edited + 5
-
-    if speed_factor != 1.0:
-        edited = edited._spawn(edited.raw_data, overrides={"frame_rate": int(edited.frame_rate * speed_factor)})
-        edited = edited.set_frame_rate(audio.frame_rate)
-
-    start_trim_ms = max(0, int(trim_start_sec * 1000))
-    end_trim_ms = max(0, int(trim_end_sec * 1000))
-    if start_trim_ms + end_trim_ms < len(edited):
-        edited = edited[start_trim_ms : len(edited) - end_trim_ms]
-
-    if replace_segment:
-        start_ms = max(0, int(replace_start_sec * 1000))
-        end_ms = min(len(edited), int(replace_end_sec * 1000))
-        edited = overlay_or_replace_segment(edited, start_ms, end_ms, replacement_audio)
-
-    if reverse_audio:
-        edited = edited.reverse()
-
-    return edited
-
-
-def save_audio_record(
-    user_id: str,
-    title: str,
-    original_filename: str,
-    audio_bytes: bytes,
-    transcript: str,
-    translation: str,
-    edits: dict,
-):
-    supabase.table("audio_records").insert(
-        {
-            "user_id": user_id,
-            "title": title,
-            "original_filename": original_filename,
-            "transcript": transcript,
-            "translation": translation,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
-            "edits": edits,
-        }
-    ).execute()
-
-
-def get_user_audio_records(user_id: str) -> list[dict]:
-    try:
-        response = (
-            supabase.table("audio_records")
-            .select("*")
-            .eq("user_id", user_id)
-            .order("created_at", desc=True)
-            .execute()
+def init_db(conn: sqlite3.Connection):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
-        return response.data or []
-    except Exception as exc:
-        st.error(f"Supabase error: {exc}")
-        return []
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS progress (
+            username TEXT NOT NULL,
+            language TEXT NOT NULL,
+            answered_json TEXT NOT NULL DEFAULT '[]',
+            correct INTEGER NOT NULL DEFAULT 0,
+            attempted INTEGER NOT NULL DEFAULT 0,
+            last_question TEXT,
+            PRIMARY KEY (username, language),
+            FOREIGN KEY (username) REFERENCES users(username)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS special_feature_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            feature TEXT NOT NULL,
+            response TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (username) REFERENCES users(username)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notes (
+            username TEXT NOT NULL,
+            language TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (username, language),
+            FOREIGN KEY (username) REFERENCES users(username)
+        )
+        """
+    )
+    conn.commit()
 
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user" not in st.session_state:
-    st.session_state.user = ""
-if "user_id" not in st.session_state:
-    st.session_state.user_id = ""
+def ensure_user_language_rows(conn: sqlite3.Connection, username: str):
+    for lang in LANGUAGES:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO progress(username, language, answered_json, correct, attempted, last_question)
+            VALUES (?, ?, '[]', 0, 0, NULL)
+            """,
+            (username, lang),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO notes(username, language, content, updated_at)
+            VALUES (?, ?, '', ?)
+            """,
+            (username, lang, utc_now()),
+        )
+    conn.commit()
 
 
-if not st.session_state.logged_in:
-    st.title("🎙️ JounaCord Studio")
-    st.caption("Record or upload voice, translate content, and save everything to Supabase.")
+def generate_question_bank(language: str, count: int = 100) -> list[dict[str, Any]]:
+    concepts = {
+        "Python": ["lists", "tuples", "dictionaries", "functions", "classes", "decorators", "PEP 8", "generators", "exceptions", "context managers"],
+        "Java": ["JVM", "JDK", "inheritance", "interfaces", "collections", "streams", "exceptions", "generics", "threads", "garbage collection"],
+        "C++": ["pointers", "references", "RAII", "STL", "templates", "smart pointers", "virtual functions", "move semantics", "namespaces", "const correctness"],
+        "JavaScript": ["closures", "promises", "async/await", "DOM", "event loop", "hoisting", "modules", "JSON", "array methods", "fetch API"],
+        "Go": ["goroutines", "channels", "interfaces", "slices", "maps", "defer", "error handling", "modules", "pointers", "structs"],
+        "Rust": ["ownership", "borrowing", "lifetimes", "traits", "enums", "pattern matching", "Result", "Option", "macros", "crates"],
+    }
+    templates = [
+        "{lang} Question #{n}: Explain or identify the role of {topic}.",
+        "In {lang}, what is the purpose of {topic}? (Q{n})",
+        "{lang} quiz item {n}: Give one key point about {topic}.",
+        "Q{n} [{lang}] - When do you use {topic}?",
+    ]
+    rows: list[dict[str, Any]] = []
+    topic_list = concepts[language]
+    for i in range(count):
+        topic = topic_list[i % len(topic_list)]
+        text = random.Random(f"{language}-{i}").choice(templates).format(lang=language, n=i + 1, topic=topic)
+        rows.append(
+            {
+                "id": f"{slugify(language)}_{i + 1}",
+                "question": text,
+                "answer": topic.lower(),
+                "hint": f"Think about practical use of {topic} in {language}.",
+            }
+        )
+    return rows
 
-    auth_tab_login, auth_tab_signup = st.tabs(["Login", "Sign Up"])
 
-    with auth_tab_login:
+@st.cache_data
+def get_all_questions() -> dict[str, list[dict[str, Any]]]:
+    return {language: generate_question_bank(language, 100) for language in LANGUAGES}
+
+
+def create_user(conn: sqlite3.Connection, username: str, password: str) -> tuple[bool, str]:
+    exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+    if exists:
+        return False, "Username already exists."
+
+    conn.execute(
+        "INSERT INTO users(username, password_hash, created_at) VALUES (?, ?, ?)",
+        (username, hash_password(password), utc_now()),
+    )
+    conn.commit()
+    ensure_user_language_rows(conn, username)
+    return True, "Account created. You can now log in."
+
+
+def authenticate_user(conn: sqlite3.Connection, username: str, password: str) -> bool:
+    row = conn.execute("SELECT password_hash FROM users WHERE username = ?", (username,)).fetchone()
+    return bool(row and row["password_hash"] == hash_password(password))
+
+
+def get_user_data(conn: sqlite3.Connection, username: str) -> dict[str, Any]:
+    ensure_user_language_rows(conn, username)
+
+    progress_rows = conn.execute(
+        "SELECT language, answered_json, correct, attempted, last_question FROM progress WHERE username = ?",
+        (username,),
+    ).fetchall()
+    progress = {
+        row["language"]: {
+            "answered": json.loads(row["answered_json"]),
+            "correct": row["correct"],
+            "attempted": row["attempted"],
+            "last_question": row["last_question"],
+        }
+        for row in progress_rows
+    }
+
+    note_rows = conn.execute("SELECT language, content FROM notes WHERE username = ?", (username,)).fetchall()
+    notes = {row["language"]: row["content"] for row in note_rows}
+
+    attempts = conn.execute(
+        "SELECT feature, response, created_at FROM special_feature_attempts WHERE username = ? ORDER BY id DESC LIMIT 20",
+        (username,),
+    ).fetchall()
+
+    return {
+        "progress": progress,
+        "notes": notes,
+        "special_feature_attempts": [dict(row) for row in attempts],
+    }
+
+
+def update_progress(conn: sqlite3.Connection, username: str, language: str, state: dict[str, Any]):
+    conn.execute(
+        """
+        UPDATE progress
+        SET answered_json = ?, correct = ?, attempted = ?, last_question = ?
+        WHERE username = ? AND language = ?
+        """,
+        (
+            json.dumps(state.get("answered", [])),
+            state.get("correct", 0),
+            state.get("attempted", 0),
+            state.get("last_question"),
+            username,
+            language,
+        ),
+    )
+    conn.commit()
+
+
+def save_special_response(conn: sqlite3.Connection, username: str, feature: str, response: str):
+    conn.execute(
+        "INSERT INTO special_feature_attempts(username, feature, response, created_at) VALUES (?, ?, ?, ?)",
+        (username, feature, response, utc_now()),
+    )
+    conn.commit()
+
+
+def save_note(conn: sqlite3.Connection, username: str, language: str, note: str):
+    conn.execute(
+        "UPDATE notes SET content = ?, updated_at = ? WHERE username = ? AND language = ?",
+        (note, utc_now(), username, language),
+    )
+    conn.commit()
+
+
+def initialize_session():
+    st.session_state.setdefault("logged_in", False)
+    st.session_state.setdefault("username", "")
+
+
+def render_auth(conn: sqlite3.Connection):
+    st.title("📚 CodeMaster Study Hub")
+    st.caption("Learn 6 coding languages with persistent SQL-backed progress.")
+
+    login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
+    with login_tab:
         username = st.text_input("Username", key="login_username")
         password = st.text_input("Password", type="password", key="login_password")
-
         if st.button("Login", type="primary"):
-            ok, user_id = authenticate_user(username.strip(), password)
-            if ok and user_id:
+            if authenticate_user(conn, username.strip(), password):
                 st.session_state.logged_in = True
-                st.session_state.user = username.strip()
-                st.session_state.user_id = user_id
+                st.session_state.username = username.strip()
                 st.success("Logged in successfully.")
                 st.rerun()
             st.error("Invalid username or password.")
 
-    with auth_tab_signup:
-        new_username = st.text_input("Create Username", key="signup_username")
-        new_password = st.text_input("Create Password", type="password", key="signup_password")
-        confirm_password = st.text_input("Confirm Password", type="password", key="signup_password_confirm")
-
-        if st.button("Sign Up"):
-            if not new_username.strip() or not new_password:
+    with signup_tab:
+        username = st.text_input("Create Username", key="signup_username")
+        password = st.text_input("Create Password", type="password", key="signup_password")
+        confirm = st.text_input("Confirm Password", type="password", key="signup_confirm")
+        if st.button("Create Account"):
+            if not username.strip() or not password:
                 st.error("Username and password are required.")
-            elif new_password != confirm_password:
+            elif password != confirm:
                 st.error("Passwords do not match.")
             else:
-                success, message = create_user(new_username.strip(), new_password)
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
-
-    st.stop()
+                ok, message = create_user(conn, username.strip(), password)
+                st.success(message) if ok else st.error(message)
 
 
-st.title("🎙️ JounaCord Studio")
-st.success(f"Welcome, {st.session_state.user}")
-st.caption("Your saved recordings are tied to your account and will remain after logout/login.")
+def choose_next_question(question_bank: list[dict[str, Any]], answered: set[str], last_question: str | None):
+    remaining = [q for q in question_bank if q["id"] not in answered]
+    if not remaining:
+        return None
+    candidates = [q for q in remaining if q["id"] != last_question]
+    return random.choice(candidates if candidates else remaining)
 
-if st.button("Logout"):
-    st.session_state.logged_in = False
-    st.session_state.user = ""
-    st.session_state.user_id = ""
-    st.rerun()
 
-create_tab, dashboard_tab = st.tabs(["Record + Translate", "My Saved Audio"])
+def render_dashboard(user_data: dict[str, Any]):
+    st.subheader("📈 Dashboard")
+    progress = user_data.get("progress", {})
 
-with create_tab:
-    st.subheader("1) Add audio")
+    total_attempted = sum(progress.get(lang, {}).get("attempted", 0) for lang in LANGUAGES)
+    total_correct = sum(progress.get(lang, {}).get("correct", 0) for lang in LANGUAGES)
+    total_questions = len(LANGUAGES) * 100
 
-    captured_audio_bytes = None
-    if hasattr(st, "audio_input"):
-        captured_audio = st.audio_input("Record audio")
-        if captured_audio:
-            captured_audio_bytes = captured_audio.read()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Attempted", total_attempted)
+    c2.metric("Total Correct", total_correct)
+    c3.metric("Completion", f"{(total_attempted / total_questions) * 100:.1f}%")
 
-    uploaded_file = st.file_uploader("Or upload audio", type=["wav", "mp3", "ogg", "m4a", "flac"], key="main_audio_uploader")
+    for lang in LANGUAGES:
+        lang_data = progress.get(lang, {"attempted": 0, "correct": 0})
+        attempted = lang_data.get("attempted", 0)
+        correct = lang_data.get("correct", 0)
+        acc = (correct / attempted) * 100 if attempted else 0
+        st.progress(min(attempted / 100, 1.0), text=f"{lang}: {attempted}/100 answered | Accuracy {acc:.1f}%")
 
-    raw_audio_bytes = captured_audio_bytes
-    original_filename = "recorded_audio.wav"
 
-    if uploaded_file is not None:
-        raw_audio_bytes = uploaded_file.read()
-        original_filename = uploaded_file.name
+def render_cheat_sheets():
+    st.subheader("📌 Code Cheat Sheets")
+    sheets = {
+        "Python": ["list/dict/set comprehensions", "functions + decorators", "exceptions + context managers"],
+        "Java": ["classes/interfaces", "collections + streams", "checked vs unchecked exceptions"],
+        "C++": ["RAII + smart pointers", "STL containers", "templates + move semantics"],
+        "JavaScript": ["scope + closures", "promises + async/await", "DOM + event handling"],
+        "Go": ["goroutines + channels", "interfaces", "error handling idioms"],
+        "Rust": ["ownership + borrowing", "traits + enums", "Result/Option + pattern matching"],
+    }
+    for lang, tips in sheets.items():
+        with st.expander(lang):
+            for tip in tips:
+                st.write(f"- {tip}")
 
-    if raw_audio_bytes:
-        st.audio(raw_audio_bytes)
 
-        st.subheader("2) Configure translation")
-        language_options = {
-            "English": "en",
-            "Spanish": "es",
-            "French": "fr",
-            "German": "de",
-            "Italian": "it",
-            "Filipino": "tl",
-            "Japanese": "ja",
-            "Korean": "ko",
-            "Chinese (Simplified)": "zh-CN",
-            "Arabic": "ar",
-            "Hindi": "hi",
+def render_quiz(conn: sqlite3.Connection, username: str, user_data: dict[str, Any], questions: dict[str, list[dict[str, Any]]]):
+    st.subheader("📝 Adaptive Quiz")
+    language = st.selectbox("Choose language", LANGUAGES)
+
+    progress = user_data.get("progress", {})
+    lang_state = progress.get(language, {"answered": [], "correct": 0, "attempted": 0, "last_question": None})
+    answered = set(lang_state.get("answered", []))
+
+    q_key = f"current_question_{language}"
+    if q_key not in st.session_state:
+        st.session_state[q_key] = choose_next_question(questions[language], answered, lang_state.get("last_question"))
+
+    q = st.session_state[q_key]
+    if not q:
+        st.success(f"You completed all 100 {language} questions.")
+        if st.button(f"Restart {language} set"):
+            reset_state = {"answered": [], "correct": 0, "attempted": 0, "last_question": None}
+            update_progress(conn, username, language, reset_state)
+            st.session_state.pop(q_key, None)
+            st.rerun()
+        return
+
+    st.write(q["question"])
+    st.caption(f"Hint: {q['hint']}")
+    user_answer = st.text_input("Your answer", key=f"ans_{language}_{q['id']}")
+
+    if st.button("Submit Answer", key=f"submit_{language}"):
+        correct = q["answer"] in user_answer.strip().lower()
+        st.success("Correct ✅") if correct else st.error(f"Expected concept: {q['answer']}")
+
+        new_state = {
+            "answered": list(answered | {q["id"]}),
+            "correct": lang_state.get("correct", 0) + (1 if correct else 0),
+            "attempted": lang_state.get("attempted", 0) + 1,
+            "last_question": q["id"],
         }
-        source_lang_name = st.selectbox("Source language", options=list(language_options), index=0)
-        target_lang_name = st.selectbox("Target language", options=list(language_options), index=1)
-        source_lang = language_options[source_lang_name]
-        target_lang = language_options[target_lang_name]
+        update_progress(conn, username, language, new_state)
+        st.session_state.pop(q_key, None)
+        st.rerun()
 
-        title = st.text_input("Audio title", value="My audio")
 
-        if st.button("Translate and Save", type="primary"):
-            try:
-                source_audio = AudioSegment.from_file(io.BytesIO(raw_audio_bytes))
-                transcript, translation = transcribe_and_translate(source_audio, source_lang, target_lang)
-                final_audio_bytes = audiosegment_to_bytes(source_audio, export_format="mp3")
+def render_special_features(conn: sqlite3.Connection, username: str, user_data: dict[str, Any]):
+    st.subheader("✨ Special Features")
+    feature = st.selectbox("Pick a special mode", SPECIAL_FEATURES)
+    prompts = {
+        "Daily Challenge": "Share one performance improvement trick.",
+        "Debug Sprint": "Describe a bug and how you fixed it.",
+        "Interview Prep": "Explain polymorphism in simple terms.",
+        "Speed Round": "Write one best practice for clean code.",
+    }
 
-                st.subheader("Transcript")
-                st.write(transcript)
-                st.subheader("Translation")
-                st.write(translation)
-                st.audio(final_audio_bytes)
+    response = st.text_area("Your response", placeholder=prompts[feature], height=130)
+    if st.button("Save Response"):
+        if response.strip():
+            save_special_response(conn, username, feature, response.strip())
+            st.success("Response saved to your profile.")
+        else:
+            st.warning("Please enter a response first.")
 
-                save_audio_record(
-                    user_id=st.session_state.user_id,
-                    title=title,
-                    original_filename=original_filename,
-                    audio_bytes=final_audio_bytes,
-                    transcript=transcript,
-                    translation=translation,
-                    edits={
-                        "source_lang": source_lang,
-                        "target_lang": target_lang,
-                    },
-                )
-                st.success("Audio translated and saved to your account.")
-            except Exception as exc:
-                st.error(f"Unable to process audio: {exc}")
+    st.markdown("#### Personal Notes")
+    note_lang = st.selectbox("Language for notes", LANGUAGES, key="note_lang")
+    existing = (user_data.get("notes", {}) or {}).get(note_lang, "")
+    note_value = st.text_area("Write your notes", value=existing, key="notes_input")
+    if st.button("Save Notes"):
+        save_note(conn, username, note_lang, note_value)
+        st.success("Notes saved.")
 
-with dashboard_tab:
-    st.subheader("Saved audios")
-    user_records = get_user_audio_records(st.session_state.user_id)
+    st.markdown("#### Recent Special Responses")
+    for row in user_data.get("special_feature_attempts", [])[:5]:
+        with st.expander(f"{row['feature']} • {row['created_at'][:19]}"):
+            st.write(row["response"])
 
-    if not user_records:
-        st.info("No saved audios yet.")
-    else:
-        for idx, record in enumerate(user_records, start=1):
-            with st.expander(f"{idx}. {record.get('title', 'Untitled')} • {record.get('created_at', '')}"):
-                st.write(f"**Original file:** {record.get('original_filename', 'N/A')}")
-                st.write(f"**Transcript:** {record.get('transcript', '')}")
-                st.write(f"**Translation:** {record.get('translation', '')}")
-                st.json(record.get("edits", {}))
 
-                audio_b64 = record.get("audio_base64")
-                if audio_b64:
-                    st.audio(base64.b64decode(audio_b64), format="audio/mp3")
+def render_app(conn: sqlite3.Connection):
+    username = st.session_state.username
+    user_data = get_user_data(conn, username)
+    all_questions = get_all_questions()
+
+    st.title("📚 CodeMaster Study Hub")
+    st.success(f"Welcome, {username}")
+    st.caption("Your progress is stored in SQL and remains after you leave and come back.")
+
+    if st.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.rerun()
+
+    tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Quiz", "Cheat Sheets", "Special Features"])
+    with tab1:
+        render_dashboard(user_data)
+    with tab2:
+        render_quiz(conn, username, user_data, all_questions)
+    with tab3:
+        render_cheat_sheets()
+    with tab4:
+        render_special_features(conn, username, user_data)
+
+
+def main():
+    initialize_session()
+    with closing(get_connection()) as conn:
+        init_db(conn)
+        if not st.session_state.logged_in:
+            render_auth(conn)
+            st.stop()
+        render_app(conn)
+
+
+if __name__ == "__main__":
+    main()

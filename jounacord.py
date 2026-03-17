@@ -1,364 +1,366 @@
-import base64
 import hashlib
-import io
+import random
 from datetime import datetime, timezone
+from typing import Any
 
-import speech_recognition as sr
+import firebase_admin
 import streamlit as st
-from deep_translator import GoogleTranslator
-from pydub import AudioSegment, effects
-from supabase import Client, create_client
+from firebase_admin import credentials, firestore
 
 
-st.set_page_config("JounaCord Studio", page_icon="🎙️", layout="wide")
+st.set_page_config(page_title="CodeMaster Study Hub", page_icon="📚", layout="wide")
+
+LANGUAGES = ["Python", "Java", "C++", "JavaScript", "Go", "Rust"]
+SPECIAL_FEATURES = ["Daily Challenge", "Debug Sprint", "Interview Prep", "Speed Round"]
+
+
+@st.cache_resource
+def init_firebase() -> firestore.Client:
+    if not firebase_admin._apps:
+        firebase_config = dict(st.secrets["firebase"])
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
 
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-@st.cache_resource
-def init_supabase() -> Client:
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["anon_key"]
-    return create_client(url, key)
+def slugify(value: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "_" for ch in value).strip("_")
 
 
-try:
-    supabase = init_supabase()
-except Exception as exc:
-    st.error(f"Supabase initialization failed. Add valid supabase secrets to run the app: {exc}")
-    st.stop()
+def generate_question_bank(language: str, count: int = 100) -> list[dict[str, Any]]:
+    core_sets = {
+        "Python": [
+            ("What is the output type of [] and ()?", "list and tuple"),
+            ("Which keyword creates a function?", "def"),
+            ("What structure stores key-value pairs?", "dictionary"),
+            ("What does PEP 8 describe?", "style guide"),
+            ("How do you start a class definition?", "class"),
+        ],
+        "Java": [
+            ("Which keyword defines inheritance?", "extends"),
+            ("What is JVM?", "java virtual machine"),
+            ("Which method starts a Java app?", "main"),
+            ("What keyword creates an object?", "new"),
+            ("What does JDK include besides JRE?", "compiler"),
+        ],
+        "C++": [
+            ("Which operator allocates memory dynamically?", "new"),
+            ("What is RAII focused on?", "resource management"),
+            ("Which STL container is dynamic array-like?", "vector"),
+            ("Which keyword prevents inheritance?", "final"),
+            ("What symbol is used for namespace scope?", "::"),
+        ],
+        "JavaScript": [
+            ("Which keyword declares a block-scoped variable?", "let"),
+            ("What is DOM short for?", "document object model"),
+            ("What does JSON stand for?", "javascript object notation"),
+            ("Which method converts JSON string to object?", "parse"),
+            ("What is used for asynchronous operations?", "promise"),
+        ],
+        "Go": [
+            ("Which keyword starts a goroutine?", "go"),
+            ("What command initializes a module?", "go mod init"),
+            ("Which type handles buffered concurrency communication?", "channel"),
+            ("What is the package entry point called?", "main"),
+            ("What keyword defers execution?", "defer"),
+        ],
+        "Rust": [
+            ("Which keyword declares an immutable variable?", "let"),
+            ("What ownership action transfers value?", "move"),
+            ("Which macro prints output?", "println"),
+            ("What enum is used for recoverable errors?", "result"),
+            ("Which keyword creates pattern matching branch?", "match"),
+        ],
+    }
+
+    templates = [
+        "{lang} Q{n}: {prompt}",
+        "For {lang}, answer this (#{n}): {prompt}",
+        "Knowledge check {n} in {lang}: {prompt}",
+        "Quiz {n} [{lang}] - {prompt}",
+    ]
+    base = core_sets[language]
+    questions: list[dict[str, Any]] = []
+
+    for i in range(count):
+        prompt, answer = base[i % len(base)]
+        question_text = random.Random(f"{language}-{i}").choice(templates).format(
+            lang=language,
+            n=i + 1,
+            prompt=prompt,
+        )
+        questions.append(
+            {
+                "id": f"{slugify(language)}_{i + 1}",
+                "question": question_text,
+                "answer": answer,
+                "hint": f"Focus on foundational {language} syntax and runtime concepts.",
+            }
+        )
+    return questions
 
 
-def create_user(username: str, password: str) -> tuple[bool, str]:
-    existing = (
-        supabase.table("profiles")
-        .select("id")
-        .eq("username", username)
-        .limit(1)
-        .execute()
-    )
-    if existing.data:
-        return False, "Username already exists. Please choose another username."
+@st.cache_data
+def get_all_questions() -> dict[str, list[dict[str, Any]]]:
+    return {lang: generate_question_bank(lang, 100) for lang in LANGUAGES}
 
-    auth_response = supabase.auth.sign_up(
+
+def create_user(db: firestore.Client, username: str, password: str) -> tuple[bool, str]:
+    user_ref = db.collection("users").document(username)
+    if user_ref.get().exists:
+        return False, "Username already exists."
+
+    user_ref.set(
         {
-            "email": f"{username}@jounacord.local",
-            "password": password,
-            "options": {
-                "data": {
-                    "username": username,
-                }
-            },
-        }
-    )
-
-    user = auth_response.user
-    if not user:
-        return False, "Unable to create account. Please try again."
-
-    supabase.table("profiles").upsert(
-        {
-            "id": user.id,
             "username": username,
             "password_hash": hash_password(password),
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "progress": {
+                lang: {
+                    "answered": [],
+                    "correct": 0,
+                    "attempted": 0,
+                    "last_question": None,
+                }
+                for lang in LANGUAGES
+            },
+            "special_feature_attempts": [],
+            "notes": {},
         }
-    ).execute()
-
-    return True, "Account created successfully. Please log in."
-
-
-def authenticate_user(username: str, password: str) -> tuple[bool, str | None]:
-    profile = (
-        supabase.table("profiles")
-        .select("id,password_hash")
-        .eq("username", username)
-        .limit(1)
-        .execute()
     )
-
-    if not profile.data:
-        return False, None
-
-    row = profile.data[0]
-    if row.get("password_hash") != hash_password(password):
-        return False, None
-
-    user_id = row["id"]
-    return True, user_id
+    return True, "Account created. You can now log in."
 
 
-def audiosegment_to_bytes(audio: AudioSegment, export_format: str = "mp3") -> bytes:
-    export_buffer = io.BytesIO()
-    audio.export(export_buffer, format=export_format)
-    return export_buffer.getvalue()
+def authenticate_user(db: firestore.Client, username: str, password: str) -> bool:
+    doc = db.collection("users").document(username).get()
+    if not doc.exists:
+        return False
+    data = doc.to_dict() or {}
+    return data.get("password_hash") == hash_password(password)
 
 
-def transcribe_and_translate(audio: AudioSegment, source_lang: str, target_lang: str) -> tuple[str, str]:
-    try:
-        wav_io = io.BytesIO()
-        audio.set_channels(1).set_frame_rate(16000).export(wav_io, format="wav")
-        wav_io.seek(0)
-
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_io) as source:
-            recorded_audio = recognizer.record(source)
-
-        transcript = recognizer.recognize_google(recorded_audio, language=source_lang)
-    except Exception as exc:
-        transcript = f"[Transcription failed: {exc}]"
-
-    try:
-        translation = GoogleTranslator(source=source_lang, target=target_lang).translate(transcript)
-    except Exception as exc:
-        translation = f"[Translation failed: {exc}]"
-
-    return transcript, translation
+def get_user_data(db: firestore.Client, username: str) -> dict[str, Any]:
+    doc = db.collection("users").document(username).get()
+    return doc.to_dict() if doc.exists else {}
 
 
-def overlay_or_replace_segment(
-    audio: AudioSegment,
-    start_ms: int,
-    end_ms: int,
-    replacement_audio: AudioSegment | None,
-) -> AudioSegment:
-    if start_ms >= end_ms:
-        return audio
-
-    if replacement_audio is None:
-        replacement_segment = AudioSegment.silent(duration=end_ms - start_ms)
-    else:
-        replacement_segment = replacement_audio.set_channels(audio.channels).set_frame_rate(audio.frame_rate)
-        replacement_segment = replacement_segment[: end_ms - start_ms]
-        if len(replacement_segment) < end_ms - start_ms:
-            replacement_segment += AudioSegment.silent(duration=(end_ms - start_ms) - len(replacement_segment))
-
-    return audio[:start_ms] + replacement_segment + audio[end_ms:]
+def save_user_data(db: firestore.Client, username: str, payload: dict[str, Any]):
+    db.collection("users").document(username).set(payload, merge=True)
 
 
-def apply_audio_edits(
-    audio: AudioSegment,
-    enhance_audio: bool,
-    speed_factor: float,
-    replace_segment: bool,
-    replace_start_sec: float,
-    replace_end_sec: float,
-    replacement_audio: AudioSegment | None,
-    trim_start_sec: float,
-    trim_end_sec: float,
-    reverse_audio: bool,
-) -> AudioSegment:
-    edited = audio
-
-    if enhance_audio:
-        edited = effects.normalize(edited)
-        edited = edited.high_pass_filter(100)
-        edited = edited + 5
-
-    if speed_factor != 1.0:
-        edited = edited._spawn(edited.raw_data, overrides={"frame_rate": int(edited.frame_rate * speed_factor)})
-        edited = edited.set_frame_rate(audio.frame_rate)
-
-    start_trim_ms = max(0, int(trim_start_sec * 1000))
-    end_trim_ms = max(0, int(trim_end_sec * 1000))
-    if start_trim_ms + end_trim_ms < len(edited):
-        edited = edited[start_trim_ms : len(edited) - end_trim_ms]
-
-    if replace_segment:
-        start_ms = max(0, int(replace_start_sec * 1000))
-        end_ms = min(len(edited), int(replace_end_sec * 1000))
-        edited = overlay_or_replace_segment(edited, start_ms, end_ms, replacement_audio)
-
-    if reverse_audio:
-        edited = edited.reverse()
-
-    return edited
+def initialize_session():
+    st.session_state.setdefault("logged_in", False)
+    st.session_state.setdefault("username", "")
 
 
-def save_audio_record(
-    user_id: str,
-    title: str,
-    original_filename: str,
-    audio_bytes: bytes,
-    transcript: str,
-    translation: str,
-    edits: dict,
-):
-    supabase.table("audio_records").insert(
-        {
-            "user_id": user_id,
-            "title": title,
-            "original_filename": original_filename,
-            "transcript": transcript,
-            "translation": translation,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
-            "edits": edits,
-        }
-    ).execute()
+def render_auth(db: firestore.Client):
+    st.title("📚 CodeMaster Study Hub")
+    st.caption("Master 6 languages with persistent progress stored in Firebase.")
 
+    login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
 
-def get_user_audio_records(user_id: str) -> list[dict]:
-    try:
-        response = (
-            supabase.table("audio_records")
-            .select("*")
-            .eq("user_id", user_id)
-            .order("created_at", desc=True)
-            .execute()
-        )
-        return response.data or []
-    except Exception as exc:
-        st.error(f"Supabase error: {exc}")
-        return []
-
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user" not in st.session_state:
-    st.session_state.user = ""
-if "user_id" not in st.session_state:
-    st.session_state.user_id = ""
-
-
-if not st.session_state.logged_in:
-    st.title("🎙️ JounaCord Studio")
-    st.caption("Record or upload voice, translate content, and save everything to Supabase.")
-
-    auth_tab_login, auth_tab_signup = st.tabs(["Login", "Sign Up"])
-
-    with auth_tab_login:
+    with login_tab:
         username = st.text_input("Username", key="login_username")
         password = st.text_input("Password", type="password", key="login_password")
-
         if st.button("Login", type="primary"):
-            ok, user_id = authenticate_user(username.strip(), password)
-            if ok and user_id:
+            if authenticate_user(db, username.strip(), password):
                 st.session_state.logged_in = True
-                st.session_state.user = username.strip()
-                st.session_state.user_id = user_id
-                st.success("Logged in successfully.")
+                st.session_state.username = username.strip()
+                st.success("Login successful.")
                 st.rerun()
-            st.error("Invalid username or password.")
+            st.error("Invalid credentials.")
 
-    with auth_tab_signup:
-        new_username = st.text_input("Create Username", key="signup_username")
-        new_password = st.text_input("Create Password", type="password", key="signup_password")
-        confirm_password = st.text_input("Confirm Password", type="password", key="signup_password_confirm")
-
-        if st.button("Sign Up"):
-            if not new_username.strip() or not new_password:
+    with signup_tab:
+        username = st.text_input("Create Username", key="signup_username")
+        password = st.text_input("Create Password", type="password", key="signup_password")
+        confirm = st.text_input("Confirm Password", type="password", key="signup_confirm")
+        if st.button("Create Account"):
+            if not username.strip() or not password:
                 st.error("Username and password are required.")
-            elif new_password != confirm_password:
+            elif password != confirm:
                 st.error("Passwords do not match.")
             else:
-                success, message = create_user(new_username.strip(), new_password)
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
-
-    st.stop()
+                ok, message = create_user(db, username.strip(), password)
+                st.success(message) if ok else st.error(message)
 
 
-st.title("🎙️ JounaCord Studio")
-st.success(f"Welcome, {st.session_state.user}")
-st.caption("Your saved recordings are tied to your account and will remain after logout/login.")
+def choose_next_question(question_bank: list[dict[str, Any]], answered: set[str], last_question: str | None):
+    remaining = [q for q in question_bank if q["id"] not in answered]
+    if not remaining:
+        return None
 
-if st.button("Logout"):
-    st.session_state.logged_in = False
-    st.session_state.user = ""
-    st.session_state.user_id = ""
-    st.rerun()
+    candidates = [q for q in remaining if q["id"] != last_question]
+    pool = candidates if candidates else remaining
+    return random.choice(pool)
 
-create_tab, dashboard_tab = st.tabs(["Record + Translate", "My Saved Audio"])
 
-with create_tab:
-    st.subheader("1) Add audio")
+def render_dashboard(user_data: dict[str, Any]):
+    st.subheader("📈 Dashboard")
+    progress = user_data.get("progress", {})
+    cols = st.columns(3)
 
-    captured_audio_bytes = None
-    if hasattr(st, "audio_input"):
-        captured_audio = st.audio_input("Record audio")
-        if captured_audio:
-            captured_audio_bytes = captured_audio.read()
+    total_attempted = sum(progress.get(lang, {}).get("attempted", 0) for lang in LANGUAGES)
+    total_correct = sum(progress.get(lang, {}).get("correct", 0) for lang in LANGUAGES)
+    total_questions = len(LANGUAGES) * 100
 
-    uploaded_file = st.file_uploader("Or upload audio", type=["wav", "mp3", "ogg", "m4a", "flac"], key="main_audio_uploader")
+    cols[0].metric("Total Attempted", total_attempted)
+    cols[1].metric("Total Correct", total_correct)
+    cols[2].metric("Completion", f"{(total_attempted / total_questions) * 100:.1f}%")
 
-    raw_audio_bytes = captured_audio_bytes
-    original_filename = "recorded_audio.wav"
+    for lang in LANGUAGES:
+        lang_data = progress.get(lang, {"attempted": 0, "correct": 0})
+        attempted = lang_data.get("attempted", 0)
+        correct = lang_data.get("correct", 0)
+        score = (correct / attempted) * 100 if attempted else 0
+        st.progress(min(attempted / 100, 1.0), text=f"{lang}: {attempted}/100 answered | Accuracy {score:.1f}%")
 
-    if uploaded_file is not None:
-        raw_audio_bytes = uploaded_file.read()
-        original_filename = uploaded_file.name
 
-    if raw_audio_bytes:
-        st.audio(raw_audio_bytes)
+def render_cheat_sheets():
+    st.subheader("📌 Code Cheat Sheets")
+    cheats = {
+        "Python": "Lists, dicts, comprehensions, classes, decorators, context managers.",
+        "Java": "OOP, interfaces, exception handling, collections, streams, JVM memory model.",
+        "C++": "Pointers/references, RAII, STL containers, templates, smart pointers.",
+        "JavaScript": "Closures, async/await, promises, array methods, DOM manipulation.",
+        "Go": "Goroutines/channels, interfaces, error handling, modules, slices/maps.",
+        "Rust": "Ownership, borrowing, lifetimes, traits, enums/match, Result/Option.",
+    }
+    for lang, cheat in cheats.items():
+        with st.expander(lang):
+            st.write(cheat)
 
-        st.subheader("2) Configure translation")
-        language_options = {
-            "English": "en",
-            "Spanish": "es",
-            "French": "fr",
-            "German": "de",
-            "Italian": "it",
-            "Filipino": "tl",
-            "Japanese": "ja",
-            "Korean": "ko",
-            "Chinese (Simplified)": "zh-CN",
-            "Arabic": "ar",
-            "Hindi": "hi",
-        }
-        source_lang_name = st.selectbox("Source language", options=list(language_options), index=0)
-        target_lang_name = st.selectbox("Target language", options=list(language_options), index=1)
-        source_lang = language_options[source_lang_name]
-        target_lang = language_options[target_lang_name]
 
-        title = st.text_input("Audio title", value="My audio")
+def render_quiz(db: firestore.Client, username: str, user_data: dict[str, Any], questions: dict[str, list[dict[str, Any]]]):
+    st.subheader("📝 Adaptive Quiz")
+    language = st.selectbox("Choose language", LANGUAGES)
 
-        if st.button("Translate and Save", type="primary"):
-            try:
-                source_audio = AudioSegment.from_file(io.BytesIO(raw_audio_bytes))
-                transcript, translation = transcribe_and_translate(source_audio, source_lang, target_lang)
-                final_audio_bytes = audiosegment_to_bytes(source_audio, export_format="mp3")
+    progress = user_data.setdefault("progress", {})
+    lang_state = progress.setdefault(language, {"answered": [], "correct": 0, "attempted": 0, "last_question": None})
+    answered = set(lang_state.get("answered", []))
 
-                st.subheader("Transcript")
-                st.write(transcript)
-                st.subheader("Translation")
-                st.write(translation)
-                st.audio(final_audio_bytes)
+    current_key = f"current_question_{language}"
+    if current_key not in st.session_state:
+        st.session_state[current_key] = choose_next_question(
+            questions[language],
+            answered,
+            lang_state.get("last_question"),
+        )
 
-                save_audio_record(
-                    user_id=st.session_state.user_id,
-                    title=title,
-                    original_filename=original_filename,
-                    audio_bytes=final_audio_bytes,
-                    transcript=transcript,
-                    translation=translation,
-                    edits={
-                        "source_lang": source_lang,
-                        "target_lang": target_lang,
-                    },
-                )
-                st.success("Audio translated and saved to your account.")
-            except Exception as exc:
-                st.error(f"Unable to process audio: {exc}")
+    current_q = st.session_state[current_key]
+    if not current_q:
+        st.success(f"You completed all 100 {language} questions. Great job!")
+        if st.button(f"Restart {language} quiz set"):
+            progress[language] = {"answered": [], "correct": 0, "attempted": 0, "last_question": None}
+            save_user_data(db, username, {"progress": progress})
+            st.session_state.pop(current_key, None)
+            st.rerun()
+        return
 
-with dashboard_tab:
-    st.subheader("Saved audios")
-    user_records = get_user_audio_records(st.session_state.user_id)
+    st.write(current_q["question"])
+    st.caption(f"Hint: {current_q['hint']}")
+    answer = st.text_input("Your answer", key=f"ans_{language}_{current_q['id']}")
 
-    if not user_records:
-        st.info("No saved audios yet.")
-    else:
-        for idx, record in enumerate(user_records, start=1):
-            with st.expander(f"{idx}. {record.get('title', 'Untitled')} • {record.get('created_at', '')}"):
-                st.write(f"**Original file:** {record.get('original_filename', 'N/A')}")
-                st.write(f"**Transcript:** {record.get('transcript', '')}")
-                st.write(f"**Translation:** {record.get('translation', '')}")
-                st.json(record.get("edits", {}))
+    if st.button("Submit answer", key=f"submit_{language}"):
+        is_correct = current_q["answer"].lower() in answer.strip().lower()
+        st.success("Correct ✅") if is_correct else st.error(f"Not quite. Expected concept: {current_q['answer']}")
 
-                audio_b64 = record.get("audio_base64")
-                if audio_b64:
-                    st.audio(base64.b64decode(audio_b64), format="audio/mp3")
+        lang_state["attempted"] = lang_state.get("attempted", 0) + 1
+        if is_correct:
+            lang_state["correct"] = lang_state.get("correct", 0) + 1
+        lang_state["answered"] = list(answered | {current_q["id"]})
+        lang_state["last_question"] = current_q["id"]
+        progress[language] = lang_state
+
+        save_user_data(db, username, {"progress": progress})
+
+        st.session_state.pop(current_key, None)
+        st.rerun()
+
+
+def render_special_features(db: firestore.Client, username: str, user_data: dict[str, Any]):
+    st.subheader("✨ Special Features")
+    feature = st.selectbox("Pick a special mode", SPECIAL_FEATURES)
+
+    prompt_map = {
+        "Daily Challenge": "Explain one optimization technique you used recently.",
+        "Debug Sprint": "Share a bug scenario and your fix strategy.",
+        "Interview Prep": "How would you explain polymorphism to a beginner?",
+        "Speed Round": "Write one tip for writing cleaner functions.",
+    }
+
+    response = st.text_area("Your response", placeholder=prompt_map[feature], height=130)
+    if st.button("Save special feature response"):
+        attempts = user_data.get("special_feature_attempts", [])
+        attempts.append(
+            {
+                "feature": feature,
+                "response": response,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        save_user_data(db, username, {"special_feature_attempts": attempts})
+        st.success("Saved. Your interactive response is now part of your learning record.")
+
+    st.markdown("#### Personal Notes")
+    selected_lang = st.selectbox("Language for notes", LANGUAGES, key="note_lang")
+    existing_notes = (user_data.get("notes", {}) or {}).get(selected_lang, "")
+    notes = st.text_area("Write your notes", value=existing_notes, key="notes_input")
+    if st.button("Save notes"):
+        all_notes = user_data.get("notes", {})
+        all_notes[selected_lang] = notes
+        save_user_data(db, username, {"notes": all_notes})
+        st.success("Notes saved.")
+
+
+def render_app(db: firestore.Client):
+    username = st.session_state.username
+    user_data = get_user_data(db, username)
+    questions = get_all_questions()
+
+    st.title("📚 CodeMaster Study Hub")
+    st.success(f"Welcome, {username}")
+    st.caption("Progress is saved in Firebase and remains available when you leave and come back.")
+
+    if st.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.rerun()
+
+    dashboard_tab, quiz_tab, cheats_tab, special_tab = st.tabs(
+        ["Dashboard", "Quiz", "Cheat Sheets", "Special Features"]
+    )
+
+    with dashboard_tab:
+        render_dashboard(user_data)
+
+    with quiz_tab:
+        render_quiz(db, username, user_data, questions)
+
+    with cheats_tab:
+        render_cheat_sheets()
+
+    with special_tab:
+        render_special_features(db, username, user_data)
+
+
+def main():
+    initialize_session()
+    try:
+        db = init_firebase()
+    except Exception as exc:
+        st.error(f"Firebase initialization failed. Add valid firebase secrets to run the app: {exc}")
+        st.stop()
+
+    if not st.session_state.logged_in:
+        render_auth(db)
+        st.stop()
+
+    render_app(db)
+
+
+if __name__ == "__main__":
+    main()

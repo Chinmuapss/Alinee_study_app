@@ -8,11 +8,12 @@ from firebase_admin import credentials, firestore
 import speech_recognition as sr
 from deep_translator import GoogleTranslator
 from pydub import AudioSegment
-
 from streamlit_webrtc import webrtc_streamer, AudioProcessorBase
 import av
 
-st.set_page_config(page_title="jounacord", page_icon="🎙️", layout="wide")
+# ---------------- PAGE ---------------- #
+
+st.set_page_config("jounacord", page_icon="🎙️", layout="wide")
 
 # ---------------- FIREBASE ---------------- #
 
@@ -25,7 +26,43 @@ def init_firebase():
 
 db = init_firebase()
 
-# ---------------- AUDIO PROCESSOR ---------------- #
+# ---------------- LOGIN SYSTEM ---------------- #
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+# -------- LOGIN PAGE -------- #
+
+if not st.session_state.logged_in:
+
+    st.title("🎙️ jounacord")
+    st.subheader("Please Login to Continue")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+
+        # Simple demo login (you can upgrade later)
+        if username and password:
+            st.session_state.logged_in = True
+            st.session_state.user = username
+            st.rerun()
+        else:
+            st.error("Please enter username and password")
+
+    st.stop()  # Prevent app from loading until logged in
+
+# ---------------- MAIN APP ---------------- #
+
+st.title("🎙️ jounacord")
+st.success(f"Welcome {st.session_state.user}")
+
+if st.button("Logout"):
+    st.session_state.logged_in = False
+    st.rerun()
+
+# ---------------- AUDIO RECORDING ---------------- #
 
 class AudioProcessor(AudioProcessorBase):
     def __init__(self):
@@ -35,37 +72,8 @@ class AudioProcessor(AudioProcessorBase):
         self.frames.append(frame.to_ndarray())
         return frame
 
-# ---------------- TRANSCRIPTION ---------------- #
-
-def transcribe_audio(audio: AudioSegment, language_code: str):
-    wav_io = io.BytesIO()
-    audio.export(wav_io, format="wav")
-    wav_io.seek(0)
-
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_io) as source:
-        data = recognizer.record(source)
-
-    return recognizer.recognize_google(data, language=language_code)
-
-# ---------------- SAVE ---------------- #
-
-def save_record(transcript, translation, audio_bytes):
-    db.collection("jounacord_audio").add({
-        "transcript": transcript,
-        "translation": translation,
-        "audio_base64": base64.b64encode(audio_bytes).decode(),
-        "created_at": datetime.utcnow().isoformat(),
-    })
-
-# ---------------- UI ---------------- #
-
-st.title("🎙️ jounacord (WebRTC Version)")
-st.caption("Record → Transcribe → Translate → Save")
-
-# Microphone Recorder
 webrtc_ctx = webrtc_streamer(
-    key="audio",
+    key="record",
     audio_processor_factory=AudioProcessor,
     media_stream_constraints={"audio": True, "video": False},
 )
@@ -73,24 +81,14 @@ webrtc_ctx = webrtc_streamer(
 audio_data = None
 
 if webrtc_ctx.audio_processor:
-    if st.button("Stop & Process Recording"):
+    if st.button("Stop Recording"):
         frames = webrtc_ctx.audio_processor.frames
-
         if frames:
-            # Combine audio frames
-            audio_bytes = b"".join([frame.tobytes() for frame in frames])
+            audio_data = b"".join([frame.tobytes() for frame in frames])
 
-            audio_data = audio_bytes
+# ---------------- PROCESS ---------------- #
 
-# If audio exists
 if audio_data:
-
-    audio = AudioSegment(
-        data=audio_data,
-        sample_width=2,
-        frame_rate=48000,
-        channels=1
-    )
 
     st.audio(audio_data)
 
@@ -100,30 +98,51 @@ if audio_data:
     if st.button("Transcribe & Translate"):
 
         try:
-            transcript = transcribe_audio(audio, source_lang)
+            audio = AudioSegment(
+                data=audio_data,
+                sample_width=2,
+                frame_rate=48000,
+                channels=1
+            )
+
+            wav_io = io.BytesIO()
+            audio.export(wav_io, format="wav")
+            wav_io.seek(0)
+
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(wav_io) as source:
+                data = recognizer.record(source)
+
+            transcript = recognizer.recognize_google(
+                data,
+                language=source_lang
+            )
 
             translation = GoogleTranslator(
                 source=source_lang,
                 target=target_lang
             ).translate(transcript)
 
-            st.text_area("Transcript", transcript, height=150)
-            st.text_area("Translation", translation, height=150)
+            st.subheader("Transcript")
+            st.write(transcript)
 
+            st.subheader("Translation")
+            st.write(translation)
+
+            # Save to Firebase
             export = io.BytesIO()
             audio.export(export, format="mp3")
             final_audio = export.getvalue()
 
-            st.download_button(
-                "Download Audio",
-                final_audio,
-                file_name="recording.mp3",
-                mime="audio/mpeg"
-            )
+            db.collection("jounacord_audio").add({
+                "user": st.session_state.user,
+                "transcript": transcript,
+                "translation": translation,
+                "created_at": datetime.utcnow().isoformat(),
+                "audio_base64": base64.b64encode(final_audio).decode()
+            })
 
-            if st.button("Save to Firebase"):
-                save_record(transcript, translation, final_audio)
-                st.success("Saved successfully!")
+            st.success("Saved to Firebase!")
 
         except Exception as e:
             st.error(str(e))

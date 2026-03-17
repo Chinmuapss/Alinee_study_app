@@ -15,24 +15,11 @@ from pydub import AudioSegment
 
 st.set_page_config(page_title="jounacord", page_icon="🎙️", layout="wide")
 
-SUPPORTED_TRANSLATION_LANGUAGES = {
-    "English": "en",
-    "Spanish": "es",
-    "French": "fr",
-    "German": "de",
-    "Portuguese": "pt",
-    "Indonesian": "id",
-    "Arabic": "ar",
-    "Hindi": "hi",
-    "Japanese": "ja",
-    "Korean": "ko",
-    "Chinese (Simplified)": "zh-CN",
-}
+# ---------------- FIREBASE ---------------- #
 
-
-def get_firebase_secrets() -> dict[str, Any] | None:
+def get_web_api_key() -> str | None:
     try:
-        return dict(st.secrets["firebase"]["web_api_key"])
+        return st.secrets["firebase"]["web_api_key"]
     except Exception:
         return None
 
@@ -44,30 +31,36 @@ def init_firebase() -> None:
     st.session_state.firebase_initialized = False
     st.session_state.db = None
 
-    config = get_firebase_secrets()
-    if not config:
-        return
-
     try:
+        admin_config = st.secrets["firebase_admin"]
+
         if not firebase_admin._apps:
-            firebase_admin.initialize_app(credentials.Certificate(config))
+            firebase_admin.initialize_app(
+                credentials.Certificate(dict(admin_config))
+            )
+
         st.session_state.db = firestore.client()
         st.session_state.firebase_initialized = True
+
     except Exception:
         st.session_state.firebase_initialized = False
 
 
 def firebase_ready() -> bool:
-    return bool(st.session_state.get("firebase_initialized", False) and st.session_state.get("db"))
+    return bool(
+        st.session_state.get("firebase_initialized")
+        and st.session_state.get("db")
+    )
 
+# ---------------- AUTH ---------------- #
 
 def identity_request(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
-    firebase_config = get_firebase_secrets() or {}
-    api_key = firebase_config.get("web_api_key")
+    api_key = get_web_api_key()
     if not api_key:
         raise RuntimeError("Missing firebase.web_api_key in Streamlit secrets.")
 
     url = f"https://identitytoolkit.googleapis.com/v1/{endpoint}?key={api_key}"
+
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -82,48 +75,26 @@ def identity_request(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         details = exc.read().decode("utf-8")
         try:
             error = json.loads(details).get("error", {}).get("message", details)
-        except json.JSONDecodeError:
+        except Exception:
             error = details
-        raise RuntimeError(error) from exc
+        raise RuntimeError(error)
 
 
-def signup_user(email: str, password: str) -> dict[str, Any]:
-    return identity_request("accounts:signUp", {"email": email, "password": password, "returnSecureToken": True})
+def signup_user(email: str, password: str):
+    return identity_request(
+        "accounts:signUp",
+        {"email": email, "password": password, "returnSecureToken": True},
+    )
 
 
-def login_user(email: str, password: str) -> dict[str, Any]:
-    return identity_request("accounts:signInWithPassword", {"email": email, "password": password, "returnSecureToken": True})
+def login_user(email: str, password: str):
+    return identity_request(
+        "accounts:signInWithPassword",
+        {"email": email, "password": password, "returnSecureToken": True},
+    )
 
 
-def auth_panel() -> None:
-    st.sidebar.subheader("🔐 Login")
-    if st.session_state.user:
-        st.sidebar.success(f"Signed in as {st.session_state.user['email']}")
-        if st.sidebar.button("Logout"):
-            st.session_state.user = None
-            st.rerun()
-        return
-
-    mode = st.sidebar.radio("Mode", ["Login", "Sign Up"], horizontal=True)
-    email = st.sidebar.text_input("Email")
-    password = st.sidebar.text_input("Password", type="password")
-
-    if st.sidebar.button(mode):
-        if not email or not password:
-            st.sidebar.error("Email and password are required.")
-            return
-        try:
-            payload = login_user(email, password) if mode == "Login" else signup_user(email, password)
-            st.session_state.user = {
-                "uid": payload["localId"],
-                "email": payload["email"],
-                "token": payload["idToken"],
-            }
-            st.sidebar.success(f"{mode} successful")
-            st.rerun()
-        except Exception as exc:
-            st.sidebar.error(str(exc))
-
+# ---------------- AUDIO ---------------- #
 
 def transcribe_audio(audio: AudioSegment, language_code: str) -> str:
     wav_io = io.BytesIO()
@@ -137,17 +108,15 @@ def transcribe_audio(audio: AudioSegment, language_code: str) -> str:
     return recognizer.recognize_google(data, language=language_code)
 
 
-def replace_time_range(base_audio: AudioSegment, replacement_audio: AudioSegment, start_ms: int, end_ms: int) -> AudioSegment:
-    prefix = base_audio[:start_ms]
-    suffix = base_audio[end_ms:]
-    return prefix + replacement_audio + suffix
+# ---------------- SAVE ---------------- #
 
-
-def remove_time_range(audio: AudioSegment, start_ms: int, end_ms: int) -> AudioSegment:
-    return audio[:start_ms] + audio[end_ms:]
-
-
-def save_audio_record(user_id: str, filename: str, original_text: str, translated_text: str, audio_bytes: bytes) -> None:
+def save_audio_record(
+    user_id: str,
+    filename: str,
+    original_text: str,
+    translated_text: str,
+    audio_bytes: bytes,
+) -> None:
     if not firebase_ready():
         return
 
@@ -159,84 +128,110 @@ def save_audio_record(user_id: str, filename: str, original_text: str, translate
         "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
         "created_at": datetime.utcnow().isoformat(),
     }
+
     st.session_state.db.collection("jounacord_audio").add(payload)
 
 
-def app() -> None:
+# ---------------- UI ---------------- #
+
+def app():
+
     init_firebase()
+
     if "user" not in st.session_state:
         st.session_state.user = None
 
     st.title("🎙️ jounacord")
-    st.caption("Journalist-focused audio workflow: transcribe, translate, remove clips, replace clips, and save to Firebase.")
+    st.caption("Transcribe • Translate • Edit • Save to Firebase")
 
-    auth_panel()
+    # -------- AUTH PANEL -------- #
+
+    st.sidebar.subheader("🔐 Authentication")
+
+    if st.session_state.user:
+        st.sidebar.success(f"Logged in as {st.session_state.user['email']}")
+        if st.sidebar.button("Logout"):
+            st.session_state.user = None
+            st.rerun()
+        return
+
+    mode = st.sidebar.radio("Mode", ["Login", "Sign Up"], horizontal=True)
+    email = st.sidebar.text_input("Email")
+    password = st.sidebar.text_input("Password", type="password")
+
+    if st.sidebar.button(mode):
+        if not email or not password:
+            st.sidebar.error("Email and password required.")
+        else:
+            try:
+                if mode == "Login":
+                    payload = login_user(email, password)
+                else:
+                    payload = signup_user(email, password)
+
+                st.session_state.user = {
+                    "uid": payload["localId"],
+                    "email": payload["email"],
+                    "token": payload["idToken"],
+                }
+
+                st.rerun()
+
+            except Exception as e:
+                st.sidebar.error(str(e))
 
     if not st.session_state.user:
-        st.info("Please login/sign up from the sidebar to continue.")
+        st.info("Please login to continue.")
         return
 
     if not firebase_ready():
-        st.warning("Firebase admin is not configured. You can still edit/translate audio, but cloud save is disabled.")
+        st.warning("Firebase Admin not configured. Cloud saving disabled.")
 
-    uploaded = st.file_uploader("Upload audio clip", type=["mp3", "wav", "ogg", "m4a"])
+    # -------- AUDIO UPLOAD -------- #
+
+    uploaded = st.file_uploader(
+        "Upload Audio",
+        type=["mp3", "wav", "ogg", "m4a"],
+    )
+
     if not uploaded:
         return
 
     source_audio = AudioSegment.from_file(io.BytesIO(uploaded.read()))
     st.audio(uploaded)
 
-    duration_seconds = round(len(source_audio) / 1000, 2)
-    st.write(f"Duration: {duration_seconds} seconds")
+    # -------- TRANSLATION -------- #
 
-    st.subheader("1) Edit audio")
-    start_sec = st.number_input("Start second", min_value=0.0, max_value=float(duration_seconds), value=0.0, step=0.1)
-    end_sec = st.number_input("End second", min_value=0.0, max_value=float(duration_seconds), value=min(2.0, float(duration_seconds)), step=0.1)
+    st.subheader("Transcribe & Translate")
 
-    edited_audio = source_audio
-    col1, col2 = st.columns(2)
+    input_lang = st.text_input("Source language code (e.g., en)", "en")
+    target_lang = st.text_input("Target language code (e.g., es)", "es")
 
-    with col1:
-        if st.button("Remove selected part"):
-            if end_sec <= start_sec:
-                st.error("End second must be greater than start second.")
-            else:
-                edited_audio = remove_time_range(source_audio, int(start_sec * 1000), int(end_sec * 1000))
-                st.success("Selected segment removed.")
+    if st.button("Process"):
 
-    with col2:
-        replacement = st.file_uploader("Replacement clip", type=["mp3", "wav", "ogg", "m4a"], key="replacement")
-        if st.button("Replace selected part"):
-            if not replacement:
-                st.error("Upload a replacement clip first.")
-            elif end_sec <= start_sec:
-                st.error("End second must be greater than start second.")
-            else:
-                replacement_audio = AudioSegment.from_file(io.BytesIO(replacement.read()))
-                edited_audio = replace_time_range(source_audio, replacement_audio, int(start_sec * 1000), int(end_sec * 1000))
-                st.success("Selected segment replaced.")
-
-    st.subheader("2) Transcribe + translate")
-    input_lang_name = st.selectbox("Audio language", list(SUPPORTED_TRANSLATION_LANGUAGES.keys()), index=0)
-    target_lang_name = st.selectbox("Translate to", list(SUPPORTED_TRANSLATION_LANGUAGES.keys()), index=1)
-
-    if st.button("Transcribe and translate"):
         try:
-            original_text = transcribe_audio(edited_audio, SUPPORTED_TRANSLATION_LANGUAGES[input_lang_name])
+            original_text = transcribe_audio(source_audio, input_lang)
+
             translated_text = GoogleTranslator(
-                source=SUPPORTED_TRANSLATION_LANGUAGES[input_lang_name],
-                target=SUPPORTED_TRANSLATION_LANGUAGES[target_lang_name],
+                source=input_lang,
+                target=target_lang,
             ).translate(original_text)
-            st.text_area("Transcript", value=original_text, height=140)
-            st.text_area("Translation", value=translated_text, height=140)
+
+            st.text_area("Transcript", original_text, height=150)
+            st.text_area("Translation", translated_text, height=150)
 
             export_io = io.BytesIO()
-            edited_audio.export(export_io, format="mp3")
+            source_audio.export(export_io, format="mp3")
             audio_bytes = export_io.getvalue()
 
-            st.download_button("Download edited audio", data=audio_bytes, file_name=f"edited_{uploaded.name}.mp3", mime="audio/mpeg")
+            st.download_button(
+                "Download Audio",
+                data=audio_bytes,
+                file_name=f"edited_{uploaded.name}.mp3",
+                mime="audio/mpeg",
+            )
 
-            if st.button("Save audio + transcript to Firebase"):
+            if st.button("Save to Firebase"):
                 save_audio_record(
                     st.session_state.user["uid"],
                     uploaded.name,
@@ -244,9 +239,10 @@ def app() -> None:
                     translated_text,
                     audio_bytes,
                 )
-                st.success("Saved to Firebase collection: jounacord_audio")
-        except Exception as exc:
-            st.error(f"Failed to transcribe/translate: {exc}")
+                st.success("Saved successfully!")
+
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 
 if __name__ == "__main__":

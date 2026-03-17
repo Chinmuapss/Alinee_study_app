@@ -3,9 +3,15 @@ import random
 from datetime import datetime, timezone
 from typing import Any
 
-import firebase_admin
 import streamlit as st
+import firebase_admin
 from firebase_admin import credentials, firestore
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(st.secrets["firebase"])
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
 
 
 st.set_page_config(page_title="CodeMaster Study Hub", page_icon="📚", layout="wide")

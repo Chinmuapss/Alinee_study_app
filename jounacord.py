@@ -86,6 +86,26 @@ def transcribe_and_translate(audio: AudioSegment, source_lang: str, target_lang:
     return transcript, translation
 
 
+def overlay_or_replace_segment(
+    audio: AudioSegment,
+    start_ms: int,
+    end_ms: int,
+    replacement_audio: AudioSegment | None,
+) -> AudioSegment:
+    if start_ms >= end_ms:
+        return audio
+
+    if replacement_audio is None:
+        replacement_segment = AudioSegment.silent(duration=end_ms - start_ms)
+    else:
+        replacement_segment = replacement_audio.set_channels(audio.channels).set_frame_rate(audio.frame_rate)
+        replacement_segment = replacement_segment[: end_ms - start_ms]
+        if len(replacement_segment) < end_ms - start_ms:
+            replacement_segment += AudioSegment.silent(duration=(end_ms - start_ms) - len(replacement_segment))
+
+    return audio[:start_ms] + replacement_segment + audio[end_ms:]
+
+
 def apply_audio_edits(
     audio: AudioSegment,
     enhance_audio: bool,
@@ -93,6 +113,10 @@ def apply_audio_edits(
     replace_segment: bool,
     replace_start_sec: float,
     replace_end_sec: float,
+    replacement_audio: AudioSegment | None,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    reverse_audio: bool,
 ) -> AudioSegment:
     edited = audio
 
@@ -105,12 +129,18 @@ def apply_audio_edits(
         edited = edited._spawn(edited.raw_data, overrides={"frame_rate": int(edited.frame_rate * speed_factor)})
         edited = edited.set_frame_rate(audio.frame_rate)
 
+    start_trim_ms = max(0, int(trim_start_sec * 1000))
+    end_trim_ms = max(0, int(trim_end_sec * 1000))
+    if start_trim_ms + end_trim_ms < len(edited):
+        edited = edited[start_trim_ms : len(edited) - end_trim_ms]
+
     if replace_segment:
         start_ms = max(0, int(replace_start_sec * 1000))
         end_ms = min(len(edited), int(replace_end_sec * 1000))
-        if start_ms < end_ms:
-            replacement = AudioSegment.silent(duration=end_ms - start_ms)
-            edited = edited[:start_ms] + replacement + edited[end_ms:]
+        edited = overlay_or_replace_segment(edited, start_ms, end_ms, replacement_audio)
+
+    if reverse_audio:
+        edited = edited.reverse()
 
     return edited
 
@@ -173,10 +203,13 @@ if not st.session_state.logged_in:
     with auth_tab_signup:
         new_username = st.text_input("Create Username", key="signup_username")
         new_password = st.text_input("Create Password", type="password", key="signup_password")
+        confirm_password = st.text_input("Confirm Password", type="password", key="signup_password_confirm")
 
         if st.button("Sign Up"):
             if not new_username.strip() or not new_password:
                 st.error("Username and password are required.")
+            elif new_password != confirm_password:
+                st.error("Passwords do not match.")
             else:
                 success, message = create_user(new_username.strip(), new_password)
                 if success:
@@ -206,7 +239,7 @@ with create_tab:
         if captured_audio:
             captured_audio_bytes = captured_audio.read()
 
-    uploaded_file = st.file_uploader("Or upload audio", type=["wav", "mp3", "ogg", "m4a", "flac"])
+    uploaded_file = st.file_uploader("Or upload audio", type=["wav", "mp3", "ogg", "m4a", "flac"], key="main_audio_uploader")
 
     raw_audio_bytes = captured_audio_bytes
     original_filename = "recorded_audio.wav"
@@ -219,8 +252,23 @@ with create_tab:
         st.audio(raw_audio_bytes)
 
         st.subheader("2) Configure translation")
-        source_lang = st.text_input("Source language code", value="en")
-        target_lang = st.text_input("Target language code", value="es")
+        language_options = {
+            "English": "en",
+            "Spanish": "es",
+            "French": "fr",
+            "German": "de",
+            "Italian": "it",
+            "Filipino": "tl",
+            "Japanese": "ja",
+            "Korean": "ko",
+            "Chinese (Simplified)": "zh-CN",
+            "Arabic": "ar",
+            "Hindi": "hi",
+        }
+        source_lang_name = st.selectbox("Source language", options=list(language_options), index=0)
+        target_lang_name = st.selectbox("Target language", options=list(language_options), index=1)
+        source_lang = language_options[source_lang_name]
+        target_lang = language_options[target_lang_name]
 
         st.subheader("3) Audio manipulation")
         enhance_audio = st.checkbox("Enhance audio (normalize + clarity boost)", value=True)
@@ -229,12 +277,23 @@ with create_tab:
         replace_segment = st.checkbox("Replace a segment with silence")
         replace_start = st.number_input("Replace start (seconds)", min_value=0.0, value=0.0, step=0.5)
         replace_end = st.number_input("Replace end (seconds)", min_value=0.0, value=2.0, step=0.5)
+        replacement_file = st.file_uploader(
+            "Optional: upload replacement audio for that segment",
+            type=["wav", "mp3", "ogg", "m4a", "flac"],
+            key="replacement_audio_uploader",
+        )
+        trim_start = st.number_input("Trim from start (seconds)", min_value=0.0, value=0.0, step=0.5)
+        trim_end = st.number_input("Trim from end (seconds)", min_value=0.0, value=0.0, step=0.5)
+        reverse_audio = st.checkbox("Reverse final audio", value=False)
 
         title = st.text_input("Audio title", value="My audio")
 
         if st.button("Process, Translate, and Save", type="primary"):
             try:
                 source_audio = AudioSegment.from_file(io.BytesIO(raw_audio_bytes))
+                replacement_segment = (
+                    AudioSegment.from_file(io.BytesIO(replacement_file.read())) if replacement_file is not None else None
+                )
                 edited_audio = apply_audio_edits(
                     audio=source_audio,
                     enhance_audio=enhance_audio,
@@ -242,6 +301,10 @@ with create_tab:
                     replace_segment=replace_segment,
                     replace_start_sec=replace_start,
                     replace_end_sec=replace_end,
+                    replacement_audio=replacement_segment,
+                    trim_start_sec=trim_start,
+                    trim_end_sec=trim_end,
+                    reverse_audio=reverse_audio,
                 )
 
                 transcript, translation = transcribe_and_translate(edited_audio, source_lang, target_lang)
@@ -266,6 +329,10 @@ with create_tab:
                         "replace_segment": replace_segment,
                         "replace_start_sec": replace_start,
                         "replace_end_sec": replace_end,
+                        "replacement_audio_uploaded": replacement_file is not None,
+                        "trim_start_sec": trim_start,
+                        "trim_end_sec": trim_end,
+                        "reverse_audio": reverse_audio,
                     },
                 )
                 st.success("Audio processed and saved to Firebase.")

@@ -1,8 +1,5 @@
 import io
-import json
 import base64
-import urllib.request
-import urllib.error
 from datetime import datetime
 
 import streamlit as st
@@ -11,11 +8,13 @@ from firebase_admin import credentials, firestore
 import speech_recognition as sr
 from deep_translator import GoogleTranslator
 from pydub import AudioSegment
-from streamlit_audiorec import st_audiorec
+
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase
+import av
 
 st.set_page_config(page_title="jounacord", page_icon="🎙️", layout="wide")
 
-# ---------------- FIREBASE ADMIN ---------------- #
+# ---------------- FIREBASE ---------------- #
 
 @st.cache_resource
 def init_firebase():
@@ -26,139 +25,82 @@ def init_firebase():
 
 db = init_firebase()
 
-# ---------------- AUTH ---------------- #
+# ---------------- AUDIO PROCESSOR ---------------- #
 
-def get_api_key():
-    return st.secrets["firebase_web"]["web_api_key"]
+class AudioProcessor(AudioProcessorBase):
+    def __init__(self):
+        self.frames = []
 
-def firebase_auth(endpoint, payload):
-    api_key = get_api_key()
-    url = f"https://identitytoolkit.googleapis.com/v1/{endpoint}?key={api_key}"
+    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+        self.frames.append(frame.to_ndarray())
+        return frame
 
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+# ---------------- TRANSCRIPTION ---------------- #
 
-    try:
-        with urllib.request.urlopen(req) as res:
-            return json.loads(res.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(e.read().decode())
-
-def signup(email, password):
-    return firebase_auth("accounts:signUp", {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    })
-
-def login(email, password):
-    return firebase_auth("accounts:signInWithPassword", {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    })
-
-# ---------------- AUDIO ---------------- #
-
-def transcribe(audio: AudioSegment, lang: str):
-    wav = io.BytesIO()
-    audio.export(wav, format="wav")
-    wav.seek(0)
+def transcribe_audio(audio: AudioSegment, language_code: str):
+    wav_io = io.BytesIO()
+    audio.export(wav_io, format="wav")
+    wav_io.seek(0)
 
     recognizer = sr.Recognizer()
-    with sr.AudioFile(wav) as source:
+    with sr.AudioFile(wav_io) as source:
         data = recognizer.record(source)
 
-    return recognizer.recognize_google(data, language=lang)
+    return recognizer.recognize_google(data, language=language_code)
 
 # ---------------- SAVE ---------------- #
 
-def save_record(user_id, transcript, translation, audio_bytes):
+def save_record(transcript, translation, audio_bytes):
     db.collection("jounacord_audio").add({
-        "user_id": user_id,
         "transcript": transcript,
         "translation": translation,
         "audio_base64": base64.b64encode(audio_bytes).decode(),
         "created_at": datetime.utcnow().isoformat(),
     })
 
-# ---------------- SESSION ---------------- #
+# ---------------- UI ---------------- #
 
-if "user" not in st.session_state:
-    st.session_state.user = None
+st.title("🎙️ jounacord (WebRTC Version)")
+st.caption("Record → Transcribe → Translate → Save")
 
-# ---------------- LOGIN UI ---------------- #
-
-st.sidebar.title("🔐 Login")
-
-if not st.session_state.user:
-
-    mode = st.sidebar.radio("Mode", ["Login", "Sign Up"])
-    email = st.sidebar.text_input("Email")
-    password = st.sidebar.text_input("Password", type="password")
-
-    if st.sidebar.button("Submit"):
-        try:
-            if mode == "Login":
-                result = login(email, password)
-            else:
-                result = signup(email, password)
-
-            st.session_state.user = {
-                "uid": result["localId"],
-                "email": result["email"],
-                "token": result["idToken"],
-            }
-
-            st.rerun()
-
-        except Exception as e:
-            st.sidebar.error(str(e))
-
-    st.stop()
-
-else:
-    st.sidebar.success(f"Logged in as {st.session_state.user['email']}")
-    if st.sidebar.button("Logout"):
-        st.session_state.user = None
-        st.rerun()
-
-# ---------------- MAIN APP ---------------- #
-
-st.title("🎙️ jounacord")
-
-mode = st.radio("Input Method", ["Upload", "Record"])
+# Microphone Recorder
+webrtc_ctx = webrtc_streamer(
+    key="audio",
+    audio_processor_factory=AudioProcessor,
+    media_stream_constraints={"audio": True, "video": False},
+)
 
 audio_data = None
 
-if mode == "Upload":
-    uploaded = st.file_uploader("Upload Audio", type=["mp3","wav","ogg","m4a"])
-    if uploaded:
-        audio_data = uploaded.read()
-        st.audio(audio_data)
+if webrtc_ctx.audio_processor:
+    if st.button("Stop & Process Recording"):
+        frames = webrtc_ctx.audio_processor.frames
 
-if mode == "Record":
-    st.write("Click record 🎤")
-    recorded = st_audiorec()
-    if recorded:
-        audio_data = recorded
-        st.audio(audio_data)
+        if frames:
+            # Combine audio frames
+            audio_bytes = b"".join([frame.tobytes() for frame in frames])
 
+            audio_data = audio_bytes
+
+# If audio exists
 if audio_data:
+
+    audio = AudioSegment(
+        data=audio_data,
+        sample_width=2,
+        frame_rate=48000,
+        channels=1
+    )
+
+    st.audio(audio_data)
 
     source_lang = st.text_input("Source language", "en")
     target_lang = st.text_input("Translate to", "es")
 
-    if st.button("Process"):
+    if st.button("Transcribe & Translate"):
 
         try:
-            audio = AudioSegment.from_file(io.BytesIO(audio_data))
-
-            transcript = transcribe(audio, source_lang)
+            transcript = transcribe_audio(audio, source_lang)
 
             translation = GoogleTranslator(
                 source=source_lang,
@@ -175,17 +117,12 @@ if audio_data:
             st.download_button(
                 "Download Audio",
                 final_audio,
-                file_name="audio.mp3",
+                file_name="recording.mp3",
                 mime="audio/mpeg"
             )
 
             if st.button("Save to Firebase"):
-                save_record(
-                    st.session_state.user["uid"],
-                    transcript,
-                    translation,
-                    final_audio
-                )
+                save_record(transcript, translation, final_audio)
                 st.success("Saved successfully!")
 
         except Exception as e:

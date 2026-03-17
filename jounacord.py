@@ -23,6 +23,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -55,31 +56,44 @@ init_db()
 # HELPERS
 # ==============================
 
-def hash_password(p):
-    return hashlib.sha256(p.encode()).hexdigest()
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
 
 def calculate_xp(correct):
     return correct * 10
 
+
 def get_rank(xp):
-    if xp < 100: return "🥉 Beginner"
-    elif xp < 300: return "🥈 Intermediate"
-    elif xp < 600: return "🥇 Advanced"
-    else: return "💎 Code Master"
+    if xp < 100:
+        return "🥉 Beginner"
+    elif xp < 300:
+        return "🥈 Intermediate"
+    elif xp < 600:
+        return "🥇 Advanced"
+    else:
+        return "💎 Code Master"
 
 # ==============================
 # USER SYSTEM
 # ==============================
 
-def create_user(u, p):
+def create_user(username, password):
     conn = get_db()
     c = conn.cursor()
+
     try:
-        c.execute("INSERT INTO users VALUES (?, ?, 0, NULL)",
-                  (u, hash_password(p)))
+        c.execute(
+            "INSERT INTO users VALUES (?, ?, 0, NULL)",
+            (username, hash_password(password))
+        )
+
         for lang in LANGUAGES:
-            c.execute("INSERT INTO progress VALUES (?, ?, 0, 0, '')",
-                      (u, lang))
+            c.execute(
+                "INSERT INTO progress VALUES (?, ?, 0, 0, '')",
+                (username, lang)
+            )
+
         conn.commit()
         return True
     except:
@@ -87,17 +101,25 @@ def create_user(u, p):
     finally:
         conn.close()
 
-def authenticate(u, p):
+
+def authenticate(username, password):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE username=?", (u,))
+
+    c.execute("SELECT * FROM users WHERE username=?", (username,))
     user = c.fetchone()
     conn.close()
-    return user and user["password_hash"] == hash_password(p)
+
+    if not user:
+        return False
+
+    return user["password_hash"] == hash_password(password)
+
 
 def update_streak(username):
     conn = get_db()
     c = conn.cursor()
+
     c.execute("SELECT * FROM users WHERE username=?", (username,))
     user = c.fetchone()
 
@@ -105,6 +127,7 @@ def update_streak(username):
 
     if user and user["last_login"]:
         last = datetime.fromisoformat(user["last_login"]).date()
+
         if (today - last).days == 1:
             streak = user["streak"] + 1
         elif (today - last).days > 1:
@@ -115,7 +138,8 @@ def update_streak(username):
         streak = 1
 
     c.execute("""
-    UPDATE users SET streak=?, last_login=?
+    UPDATE users
+    SET streak=?, last_login=?
     WHERE username=?
     """, (streak, datetime.now(timezone.utc).isoformat(), username))
 
@@ -128,12 +152,12 @@ def update_streak(username):
 
 def generate_questions(language):
 
-    base = {
+    base_questions = {
         "Python": [
-            ("Keyword for function?", "def"),
-            ("Data type for key-value?", "dictionary"),
+            ("Keyword to define function?", "def"),
+            ("Data structure for key-value pairs?", "dictionary"),
             ("Loop keyword?", "for"),
-            ("Exception handler?", "try"),
+            ("Exception handling keyword?", "try"),
             ("OOP keyword?", "class"),
         ],
         "Java": [
@@ -141,48 +165,48 @@ def generate_questions(language):
             ("Main method name?", "main"),
             ("Inheritance keyword?", "extends"),
             ("Interface keyword?", "implements"),
-            ("Runs Java?", "jvm"),
+            ("Java runs on?", "jvm"),
         ],
         "C++": [
             ("Allocate memory?", "new"),
             ("Free memory?", "delete"),
             ("Scope operator?", "::"),
-            ("Library for vector?", "stl"),
+            ("Library for containers?", "stl"),
             ("Destructor symbol?", "~"),
         ],
         "JavaScript": [
-            ("Block variable?", "let"),
-            ("Async handler?", "promise"),
-            ("DOM meaning?", "document object model"),
+            ("Block variable keyword?", "let"),
             ("Constant keyword?", "const"),
+            ("Async handling object?", "promise"),
+            ("DOM stands for?", "document object model"),
             ("Delay function?", "settimeout"),
         ],
         "Go": [
             ("Start goroutine?", "go"),
             ("Concurrency tool?", "channel"),
-            ("Module init?", "go mod"),
-            ("Main package?", "main"),
+            ("Module command?", "go mod"),
+            ("Main package name?", "main"),
             ("Delay keyword?", "defer"),
         ],
         "Rust": [
-            ("Memory safety?", "ownership"),
-            ("Error handler?", "result"),
+            ("Memory safety system?", "ownership"),
+            ("Error handling type?", "result"),
             ("Print macro?", "println"),
-            ("Pattern matching?", "match"),
-            ("Borrow system?", "reference"),
+            ("Pattern matching keyword?", "match"),
+            ("Borrowing uses?", "references"),
         ]
     }
 
-    # Expand to ~100 questions by variations
+    # Expand to 100 by repetition with unique IDs
     expanded = []
-    for q, a in base[language]:
-        for i in range(20):  # 5 x 20 = 100
-            expanded.append((f"{q} ({i+1})", a))
+    for i in range(20):  # 5 base × 20 = 100
+        for q, a in base_questions[language]:
+            expanded.append((f"{q} #{i+1}", a))
 
     return expanded
 
 # ==============================
-# SESSION
+# SESSION STATE
 # ==============================
 
 if "logged_in" not in st.session_state:
@@ -190,7 +214,7 @@ if "logged_in" not in st.session_state:
     st.session_state.username = ""
 
 # ==============================
-# AUTH UI
+# AUTH PAGE
 # ==============================
 
 if not st.session_state.logged_in:
@@ -223,12 +247,12 @@ if not st.session_state.logged_in:
             elif create_user(nu, np):
                 st.success("Account created!")
             else:
-                st.error("Username exists.")
+                st.error("Username already exists.")
 
     st.stop()
 
 # ==============================
-# LOAD USER
+# LOAD USER SAFELY
 # ==============================
 
 conn = get_db()
@@ -238,12 +262,12 @@ c.execute("SELECT * FROM users WHERE username=?",
           (st.session_state.username,))
 user = c.fetchone()
 
-if not user:
-    st.error("User missing. Login again.")
+if user is None:
+    st.error("User data missing. Please login again.")
     st.stop()
 
 # ==============================
-# SIDEBAR
+# SIDEBAR STATS
 # ==============================
 
 c.execute("SELECT * FROM progress WHERE username=?",
@@ -264,15 +288,20 @@ st.sidebar.write("🔥 Streak:", user["streak"])
 
 st.header("🧠 Tech Quiz")
 
-language = st.selectbox("Language", LANGUAGES)
+language = st.selectbox("Choose Language", LANGUAGES)
 
 questions = generate_questions(language)
 
 c.execute("""
-SELECT * FROM progress WHERE username=? AND language=?
+SELECT * FROM progress
+WHERE username=? AND language=?
 """, (st.session_state.username, language))
 
 row = c.fetchone()
+
+if row is None:
+    st.error("Progress data missing.")
+    st.stop()
 
 answered_ids = row["answered"].split(",") if row["answered"] else []
 
@@ -282,18 +311,19 @@ available = [
 ]
 
 if not available:
-    st.success("🎉 You finished all questions for this language!")
+    st.success("🎉 You completed all questions for this language!")
 else:
     idx, (question, answer) = random.choice(available)
 
     st.write("###", question)
-    user_ans = st.text_input("Answer")
+
+    user_answer = st.text_input("Your Answer")
 
     if st.button("Submit"):
         correct = row["correct"]
         attempted = row["attempted"] + 1
 
-        if user_ans.lower().strip() == answer.lower():
+        if user_answer.lower().strip() == answer.lower():
             correct += 1
             st.success("Correct ✅")
         else:
@@ -317,48 +347,65 @@ else:
         st.rerun()
 
 # ==============================
-# CHEAT SHEETS (DETAILED)
+# ELABORATED CHEAT SHEETS
 # ==============================
 
-st.header("📘 Cheat Sheets")
+st.header("📘 Detailed Cheat Sheets")
 
 cheats = {
 "Python": """
-- Functions: def
-- Data types: list, dict, tuple, set
-- OOP: class
-- Exceptions: try/except
-- Advanced: decorators, generators, async
+• Syntax: Indentation-based
+• Variables: Dynamic typing
+• Data Structures: list, tuple, dict, set
+• OOP: class, inheritance, polymorphism
+• Advanced: decorators, generators, async/await
+• Libraries: pandas, numpy, flask, django
 """,
+
 "Java": """
-- OOP: classes, inheritance
-- JVM execution
-- Interfaces
-- Collections
-- Multithreading
+• Object-Oriented Language
+• JVM-based execution
+• Core: classes, objects
+• Inheritance & interfaces
+• Collections framework
+• Multithreading
+• Garbage collection
 """,
+
 "C++": """
-- Memory: new/delete
-- Pointers & references
-- STL containers
-- RAII
+• Compiled language
+• Manual memory control
+• Pointers & references
+• STL containers
+• RAII principle
+• Templates & generics
 """,
+
 "JavaScript": """
-- DOM
-- Async/await
-- Promises
-- Closures
+• Runs in browser & Node.js
+• DOM manipulation
+• Event-driven
+• Async programming
+• Promises & async/await
+• ES6 modules
 """,
+
 "Go": """
-- Goroutines
-- Channels
-- Fast compile
+• Simple syntax
+• High performance
+• Goroutines
+• Channels
+• Built-in concurrency
+• Fast compilation
 """,
+
 "Rust": """
-- Ownership
-- Borrowing
-- Lifetimes
-- Pattern matching
+• Memory safety without GC
+• Ownership system
+• Borrowing & lifetimes
+• Pattern matching
+• Traits
+• High performance
 """
 }
 

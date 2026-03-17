@@ -1,61 +1,93 @@
 import base64
 import hashlib
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 
-import firebase_admin
 import speech_recognition as sr
 import streamlit as st
 from deep_translator import GoogleTranslator
-from firebase_admin import credentials, firestore
 from pydub import AudioSegment, effects
+from supabase import Client, create_client
 
 
 st.set_page_config("JounaCord Studio", page_icon="🎙️", layout="wide")
-
-
-@st.cache_resource
-def init_firebase():
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(dict(st.secrets["firebase"]))
-        firebase_admin.initialize_app(cred)
-    return firestore.client()
-
-
-try:
-    db = init_firebase()
-except Exception as exc:
-    st.error(f"Firebase initialization failed. Add valid firebase secrets to run the app: {exc}")
-    st.stop()
 
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
+@st.cache_resource
+def init_supabase() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
+    return create_client(url, key)
+
+
+try:
+    supabase = init_supabase()
+except Exception as exc:
+    st.error(f"Supabase initialization failed. Add valid supabase secrets to run the app: {exc}")
+    st.stop()
+
+
 def create_user(username: str, password: str) -> tuple[bool, str]:
-    existing = db.collection("jounacord_users").where("username", "==", username).limit(1).stream()
-    if any(existing):
+    existing = (
+        supabase.table("profiles")
+        .select("id")
+        .eq("username", username)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
         return False, "Username already exists. Please choose another username."
 
-    db.collection("jounacord_users").add(
+    auth_response = supabase.auth.sign_up(
         {
-            "username": username,
-            "password_hash": hash_password(password),
-            "created_at": datetime.utcnow(),  # optional but good
+            "email": f"{username}@jounacord.local",
+            "password": password,
+            "options": {
+                "data": {
+                    "username": username,
+                }
+            },
         }
     )
+
+    user = auth_response.user
+    if not user:
+        return False, "Unable to create account. Please try again."
+
+    supabase.table("profiles").upsert(
+        {
+            "id": user.id,
+            "username": username,
+            "password_hash": hash_password(password),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).execute()
+
     return True, "Account created successfully. Please log in."
 
 
-def authenticate_user(username: str, password: str) -> bool:
-    users = db.collection("jounacord_users").where("username", "==", username).limit(1).stream()
-    user_doc = next(users, None)
-    if not user_doc:
-        return False
+def authenticate_user(username: str, password: str) -> tuple[bool, str | None]:
+    profile = (
+        supabase.table("profiles")
+        .select("id,password_hash")
+        .eq("username", username)
+        .limit(1)
+        .execute()
+    )
 
-    data = user_doc.to_dict()
-    return data.get("password_hash") == hash_password(password)
+    if not profile.data:
+        return False, None
+
+    row = profile.data[0]
+    if row.get("password_hash") != hash_password(password):
+        return False, None
+
+    user_id = row["id"]
+    return True, user_id
 
 
 def audiosegment_to_bytes(audio: AudioSegment, export_format: str = "mp3") -> bytes:
@@ -75,13 +107,13 @@ def transcribe_and_translate(audio: AudioSegment, source_lang: str, target_lang:
             recorded_audio = recognizer.record(source)
 
         transcript = recognizer.recognize_google(recorded_audio, language=source_lang)
-    except Exception as e:
-        transcript = f"[Transcription failed: {e}]"
+    except Exception as exc:
+        transcript = f"[Transcription failed: {exc}]"
 
     try:
         translation = GoogleTranslator(source=source_lang, target=target_lang).translate(transcript)
-    except Exception as e:
-        translation = f"[Translation failed: {e}]"
+    except Exception as exc:
+        translation = f"[Translation failed: {exc}]"
 
     return transcript, translation
 
@@ -145,45 +177,55 @@ def apply_audio_edits(
     return edited
 
 
-def save_audio_record(user: str, title: str, original_filename: str, audio_bytes: bytes, transcript: str, translation: str, edits: dict):
-    db.collection("jounacord_audio").add(
+def save_audio_record(
+    user_id: str,
+    title: str,
+    original_filename: str,
+    audio_bytes: bytes,
+    transcript: str,
+    translation: str,
+    edits: dict,
+):
+    supabase.table("audio_records").insert(
         {
-            "user": user,
+            "user_id": user_id,
             "title": title,
             "original_filename": original_filename,
             "transcript": transcript,
             "translation": translation,
-            "created_at": datetime.utcnow(),  # ✅ FIXED
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
             "edits": edits,
         }
-    )
+    ).execute()
 
-def get_user_audio_records(user: str) -> list[dict]:
+
+def get_user_audio_records(user_id: str) -> list[dict]:
     try:
-        docs = (
-            db.collection("jounacord_audio")
-            .where("user", "==", user)
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .stream()
+        response = (
+            supabase.table("audio_records")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
         )
-        return [doc.to_dict() for doc in docs]
-    except Exception as e:
-        import traceback
-        st.error(f"Firestore error:\n{traceback.format_exc()}")
+        return response.data or []
+    except Exception as exc:
+        st.error(f"Supabase error: {exc}")
         return []
 
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-
 if "user" not in st.session_state:
     st.session_state.user = ""
+if "user_id" not in st.session_state:
+    st.session_state.user_id = ""
 
 
 if not st.session_state.logged_in:
     st.title("🎙️ JounaCord Studio")
-    st.caption("Record or upload voice/music, translate content, edit audio, and save everything to Firebase.")
+    st.caption("Record or upload voice, translate content, and save everything to Supabase.")
 
     auth_tab_login, auth_tab_signup = st.tabs(["Login", "Sign Up"])
 
@@ -192,13 +234,14 @@ if not st.session_state.logged_in:
         password = st.text_input("Password", type="password", key="login_password")
 
         if st.button("Login", type="primary"):
-            if authenticate_user(username.strip(), password):
+            ok, user_id = authenticate_user(username.strip(), password)
+            if ok and user_id:
                 st.session_state.logged_in = True
                 st.session_state.user = username.strip()
+                st.session_state.user_id = user_id
                 st.success("Logged in successfully.")
                 st.rerun()
-            else:
-                st.error("Invalid username or password.")
+            st.error("Invalid username or password.")
 
     with auth_tab_signup:
         new_username = st.text_input("Create Username", key="signup_username")
@@ -222,20 +265,22 @@ if not st.session_state.logged_in:
 
 st.title("🎙️ JounaCord Studio")
 st.success(f"Welcome, {st.session_state.user}")
+st.caption("Your saved recordings are tied to your account and will remain after logout/login.")
 
 if st.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.user = ""
+    st.session_state.user_id = ""
     st.rerun()
 
-create_tab, dashboard_tab = st.tabs(["Create / Edit Audio", "Dashboard"])
+create_tab, dashboard_tab = st.tabs(["Record + Translate", "My Saved Audio"])
 
 with create_tab:
     st.subheader("1) Add audio")
 
     captured_audio_bytes = None
     if hasattr(st, "audio_input"):
-        captured_audio = st.audio_input("Record audio (voice/music)")
+        captured_audio = st.audio_input("Record audio")
         if captured_audio:
             captured_audio_bytes = captured_audio.read()
 
@@ -270,45 +315,13 @@ with create_tab:
         source_lang = language_options[source_lang_name]
         target_lang = language_options[target_lang_name]
 
-        st.subheader("3) Audio manipulation")
-        enhance_audio = st.checkbox("Enhance audio (normalize + clarity boost)", value=True)
-        speed_factor = st.slider("Playback speed", min_value=0.5, max_value=1.5, value=1.0, step=0.1)
-
-        replace_segment = st.checkbox("Replace a segment with silence")
-        replace_start = st.number_input("Replace start (seconds)", min_value=0.0, value=0.0, step=0.5)
-        replace_end = st.number_input("Replace end (seconds)", min_value=0.0, value=2.0, step=0.5)
-        replacement_file = st.file_uploader(
-            "Optional: upload replacement audio for that segment",
-            type=["wav", "mp3", "ogg", "m4a", "flac"],
-            key="replacement_audio_uploader",
-        )
-        trim_start = st.number_input("Trim from start (seconds)", min_value=0.0, value=0.0, step=0.5)
-        trim_end = st.number_input("Trim from end (seconds)", min_value=0.0, value=0.0, step=0.5)
-        reverse_audio = st.checkbox("Reverse final audio", value=False)
-
         title = st.text_input("Audio title", value="My audio")
 
-        if st.button("Process, Translate, and Save", type="primary"):
+        if st.button("Translate and Save", type="primary"):
             try:
                 source_audio = AudioSegment.from_file(io.BytesIO(raw_audio_bytes))
-                replacement_segment = (
-                    AudioSegment.from_file(io.BytesIO(replacement_file.read())) if replacement_file is not None else None
-                )
-                edited_audio = apply_audio_edits(
-                    audio=source_audio,
-                    enhance_audio=enhance_audio,
-                    speed_factor=speed_factor,
-                    replace_segment=replace_segment,
-                    replace_start_sec=replace_start,
-                    replace_end_sec=replace_end,
-                    replacement_audio=replacement_segment,
-                    trim_start_sec=trim_start,
-                    trim_end_sec=trim_end,
-                    reverse_audio=reverse_audio,
-                )
-
-                transcript, translation = transcribe_and_translate(edited_audio, source_lang, target_lang)
-                final_audio_bytes = audiosegment_to_bytes(edited_audio, export_format="mp3")
+                transcript, translation = transcribe_and_translate(source_audio, source_lang, target_lang)
+                final_audio_bytes = audiosegment_to_bytes(source_audio, export_format="mp3")
 
                 st.subheader("Transcript")
                 st.write(transcript)
@@ -317,31 +330,24 @@ with create_tab:
                 st.audio(final_audio_bytes)
 
                 save_audio_record(
-                    user=st.session_state.user,
+                    user_id=st.session_state.user_id,
                     title=title,
                     original_filename=original_filename,
                     audio_bytes=final_audio_bytes,
                     transcript=transcript,
                     translation=translation,
                     edits={
-                        "enhance_audio": enhance_audio,
-                        "speed_factor": speed_factor,
-                        "replace_segment": replace_segment,
-                        "replace_start_sec": replace_start,
-                        "replace_end_sec": replace_end,
-                        "replacement_audio_uploaded": replacement_file is not None,
-                        "trim_start_sec": trim_start,
-                        "trim_end_sec": trim_end,
-                        "reverse_audio": reverse_audio,
+                        "source_lang": source_lang,
+                        "target_lang": target_lang,
                     },
                 )
-                st.success("Audio processed and saved to Firebase.")
+                st.success("Audio translated and saved to your account.")
             except Exception as exc:
                 st.error(f"Unable to process audio: {exc}")
 
 with dashboard_tab:
     st.subheader("Saved audios")
-    user_records = get_user_audio_records(st.session_state.user)
+    user_records = get_user_audio_records(st.session_state.user_id)
 
     if not user_records:
         st.info("No saved audios yet.")

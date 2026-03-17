@@ -32,7 +32,7 @@ SUPPORTED_TRANSLATION_LANGUAGES = {
 
 def get_firebase_secrets() -> dict[str, Any] | None:
     try:
-        return dict(st.secrets["firebase"]["web_api_key"]
+        return dict(st.secrets["firebase"]["web_api_key"])
     except Exception:
         return None
 

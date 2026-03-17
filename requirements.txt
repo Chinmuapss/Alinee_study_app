@@ -1,7 +1,3 @@
 streamlit
-supabase-py
-speechrecognition
-pydub
-deep-translator
-streamlit-webrtc
-av
+supabase
+firebase-admin

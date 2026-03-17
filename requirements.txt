@@ -1,6 +1,6 @@
 streamlit
 firebase-admin
+speechrecognition
 pydub
-SpeechRecognition
 deep-translator
-streamlit-webrtc
+streamlit-audiorec

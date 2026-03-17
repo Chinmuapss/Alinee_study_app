@@ -333,42 +333,28 @@ def reset_language(lang: str) -> None:
     }
 
 
-def complete_login(email: str, password: str, mode: str) -> None:
-    if firebase_ready():
-        payload = login_user(email, password) if mode == "Login" else signup_user(email, password)
-        st.session_state.user = {"uid": payload["localId"], "email": payload["email"], "token": payload["idToken"]}
-        load_progress_from_firebase()
-        return
-
-    if not email or not password:
-        raise RuntimeError("Email and password are required.")
-    st.session_state.user = {"uid": email.lower(), "email": email, "token": "local-session"}
-
-
-def render_login_gate() -> None:
+def auth_panel() -> None:
+    st.sidebar.markdown("### 🔐 Account")
     if st.session_state.user:
+        st.sidebar.success(f"Logged in as {st.session_state.user['email']}")
+        if st.sidebar.button("Logout"):
+            st.session_state.user = None
+            st.rerun()
         return
 
-    st.title("🔐 Login Required")
-    st.write("Please login first before using ALINEE Study App content.")
+    mode = st.sidebar.radio("Auth", ["Login", "Sign Up"], horizontal=True)
+    email = st.sidebar.text_input("Email", key=f"{mode}_email")
+    password = st.sidebar.text_input("Password", type="password", key=f"{mode}_pwd")
 
-    if not firebase_ready():
-        st.info("Firebase is not configured. Local login mode is enabled for this session.")
-
-    mode = st.radio("Authentication", ["Login", "Sign Up"], horizontal=True)
-    c1, c2 = st.columns(2)
-    email = c1.text_input("Email")
-    password = c2.text_input("Password", type="password")
-
-    if st.button(mode, type="primary"):
+    if st.sidebar.button(mode):
         try:
-            complete_login(email=email, password=password, mode=mode)
-            st.success(f"{mode} successful")
+            payload = login_user(email, password) if mode == "Login" else signup_user(email, password)
+            st.session_state.user = {"uid": payload["localId"], "email": payload["email"], "token": payload["idToken"]}
+            load_progress_from_firebase()
+            st.sidebar.success(f"{mode} successful")
             st.rerun()
         except Exception as exc:
-            st.error(str(exc))
-
-    st.stop()
+            st.sidebar.error(str(exc))
 
 
 def dashboard() -> None:
@@ -501,13 +487,10 @@ def main() -> None:
     render_login_gate()
 
     st.sidebar.title("📚 ALINEE Study App")
-    st.sidebar.success(f"Logged in as {st.session_state.user['email']}")
-    if st.sidebar.button("Logout"):
-        st.session_state.user = None
-        st.rerun()
+    auth_panel()
 
     if not firebase_ready():
-        st.sidebar.warning("Firebase config missing. Running in local login mode; cloud sync is disabled.")
+        st.sidebar.warning("Firebase config missing. App runs locally; cloud sync is disabled.")
 
     page = st.sidebar.radio("Navigate", ["Dashboard", "Progress Tracker", "Cheat Sheets", "Quizzes", "Special Features"])
 

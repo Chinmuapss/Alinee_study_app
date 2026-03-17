@@ -65,16 +65,24 @@ def audiosegment_to_bytes(audio: AudioSegment, export_format: str = "mp3") -> by
 
 
 def transcribe_and_translate(audio: AudioSegment, source_lang: str, target_lang: str) -> tuple[str, str]:
-    wav_io = io.BytesIO()
-    audio.set_channels(1).set_frame_rate(16000).export(wav_io, format="wav")
-    wav_io.seek(0)
+    try:
+        wav_io = io.BytesIO()
+        audio.set_channels(1).set_frame_rate(16000).export(wav_io, format="wav")
+        wav_io.seek(0)
 
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_io) as source:
-        recorded_audio = recognizer.record(source)
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_io) as source:
+            recorded_audio = recognizer.record(source)
 
-    transcript = recognizer.recognize_google(recorded_audio, language=source_lang)
-    translation = GoogleTranslator(source=source_lang, target=target_lang).translate(transcript)
+        transcript = recognizer.recognize_google(recorded_audio, language=source_lang)
+    except Exception as e:
+        transcript = f"[Transcription failed: {e}]"
+
+    try:
+        translation = GoogleTranslator(source=source_lang, target=target_lang).translate(transcript)
+    except Exception as e:
+        translation = f"[Translation failed: {e}]"
+
     return transcript, translation
 
 

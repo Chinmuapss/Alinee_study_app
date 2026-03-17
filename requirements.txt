@@ -3,4 +3,4 @@ firebase-admin
 pydub
 SpeechRecognition
 deep-translator
-streamlit-audiorec
+streamlit-webrtc

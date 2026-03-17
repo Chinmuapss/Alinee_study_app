@@ -42,7 +42,8 @@ def create_user(username: str, password: str) -> tuple[bool, str]:
         {
             "username": username,
             "password_hash": hash_password(password),
-            "created_at": datetime.utcnow().isoformat(),
+            .where("user", "==", user)
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
         }
     )
     return True, "Account created successfully. Please log in."

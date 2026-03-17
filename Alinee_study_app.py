@@ -484,6 +484,8 @@ def special_features() -> None:
 def main() -> None:
     init_state()
 
+    render_login_gate()
+
     st.sidebar.title("📚 ALINEE Study App")
     auth_panel()
 

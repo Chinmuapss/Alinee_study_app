@@ -1,20 +1,32 @@
 import hashlib
-import json
 import random
-import sqlite3
-from contextlib import closing
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import streamlit as st
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(st.secrets["firebase"])
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
 
 
 st.set_page_config(page_title="CodeMaster Study Hub", page_icon="📚", layout="wide")
 
-DB_PATH = Path("codemaster.db")
 LANGUAGES = ["Python", "Java", "C++", "JavaScript", "Go", "Rust"]
 SPECIAL_FEATURES = ["Daily Challenge", "Debug Sprint", "Interview Prep", "Speed Round"]
+
+
+@st.cache_resource
+def init_firebase() -> firestore.Client:
+    if not firebase_admin._apps:
+        firebase_config = dict(st.secrets["firebase"])
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
 
 
 def hash_password(password: str) -> str:
@@ -25,206 +37,125 @@ def slugify(value: str) -> str:
     return "".join(ch.lower() if ch.isalnum() else "_" for ch in value).strip("_")
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db(conn: sqlite3.Connection):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS progress (
-            username TEXT NOT NULL,
-            language TEXT NOT NULL,
-            answered_json TEXT NOT NULL DEFAULT '[]',
-            correct INTEGER NOT NULL DEFAULT 0,
-            attempted INTEGER NOT NULL DEFAULT 0,
-            last_question TEXT,
-            PRIMARY KEY (username, language),
-            FOREIGN KEY (username) REFERENCES users(username)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS special_feature_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            feature TEXT NOT NULL,
-            response TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (username) REFERENCES users(username)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS notes (
-            username TEXT NOT NULL,
-            language TEXT NOT NULL,
-            content TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (username, language),
-            FOREIGN KEY (username) REFERENCES users(username)
-        )
-        """
-    )
-    conn.commit()
-
-
-def ensure_user_language_rows(conn: sqlite3.Connection, username: str):
-    for lang in LANGUAGES:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO progress(username, language, answered_json, correct, attempted, last_question)
-            VALUES (?, ?, '[]', 0, 0, NULL)
-            """,
-            (username, lang),
-        )
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO notes(username, language, content, updated_at)
-            VALUES (?, ?, '', ?)
-            """,
-            (username, lang, utc_now()),
-        )
-    conn.commit()
-
-
 def generate_question_bank(language: str, count: int = 100) -> list[dict[str, Any]]:
-    concepts = {
-        "Python": ["lists", "tuples", "dictionaries", "functions", "classes", "decorators", "PEP 8", "generators", "exceptions", "context managers"],
-        "Java": ["JVM", "JDK", "inheritance", "interfaces", "collections", "streams", "exceptions", "generics", "threads", "garbage collection"],
-        "C++": ["pointers", "references", "RAII", "STL", "templates", "smart pointers", "virtual functions", "move semantics", "namespaces", "const correctness"],
-        "JavaScript": ["closures", "promises", "async/await", "DOM", "event loop", "hoisting", "modules", "JSON", "array methods", "fetch API"],
-        "Go": ["goroutines", "channels", "interfaces", "slices", "maps", "defer", "error handling", "modules", "pointers", "structs"],
-        "Rust": ["ownership", "borrowing", "lifetimes", "traits", "enums", "pattern matching", "Result", "Option", "macros", "crates"],
+    core_sets = {
+        "Python": [
+            ("What is the output type of [] and ()?", "list and tuple"),
+            ("Which keyword creates a function?", "def"),
+            ("What structure stores key-value pairs?", "dictionary"),
+            ("What does PEP 8 describe?", "style guide"),
+            ("How do you start a class definition?", "class"),
+        ],
+        "Java": [
+            ("Which keyword defines inheritance?", "extends"),
+            ("What is JVM?", "java virtual machine"),
+            ("Which method starts a Java app?", "main"),
+            ("What keyword creates an object?", "new"),
+            ("What does JDK include besides JRE?", "compiler"),
+        ],
+        "C++": [
+            ("Which operator allocates memory dynamically?", "new"),
+            ("What is RAII focused on?", "resource management"),
+            ("Which STL container is dynamic array-like?", "vector"),
+            ("Which keyword prevents inheritance?", "final"),
+            ("What symbol is used for namespace scope?", "::"),
+        ],
+        "JavaScript": [
+            ("Which keyword declares a block-scoped variable?", "let"),
+            ("What is DOM short for?", "document object model"),
+            ("What does JSON stand for?", "javascript object notation"),
+            ("Which method converts JSON string to object?", "parse"),
+            ("What is used for asynchronous operations?", "promise"),
+        ],
+        "Go": [
+            ("Which keyword starts a goroutine?", "go"),
+            ("What command initializes a module?", "go mod init"),
+            ("Which type handles buffered concurrency communication?", "channel"),
+            ("What is the package entry point called?", "main"),
+            ("What keyword defers execution?", "defer"),
+        ],
+        "Rust": [
+            ("Which keyword declares an immutable variable?", "let"),
+            ("What ownership action transfers value?", "move"),
+            ("Which macro prints output?", "println"),
+            ("What enum is used for recoverable errors?", "result"),
+            ("Which keyword creates pattern matching branch?", "match"),
+        ],
     }
+
     templates = [
-        "{lang} Question #{n}: Explain or identify the role of {topic}.",
-        "In {lang}, what is the purpose of {topic}? (Q{n})",
-        "{lang} quiz item {n}: Give one key point about {topic}.",
-        "Q{n} [{lang}] - When do you use {topic}?",
+        "{lang} Q{n}: {prompt}",
+        "For {lang}, answer this (#{n}): {prompt}",
+        "Knowledge check {n} in {lang}: {prompt}",
+        "Quiz {n} [{lang}] - {prompt}",
     ]
-    rows: list[dict[str, Any]] = []
-    topic_list = concepts[language]
+    base = core_sets[language]
+    questions: list[dict[str, Any]] = []
+
     for i in range(count):
-        topic = topic_list[i % len(topic_list)]
-        text = random.Random(f"{language}-{i}").choice(templates).format(lang=language, n=i + 1, topic=topic)
-        rows.append(
+        prompt, answer = base[i % len(base)]
+        question_text = random.Random(f"{language}-{i}").choice(templates).format(
+            lang=language,
+            n=i + 1,
+            prompt=prompt,
+        )
+        questions.append(
             {
                 "id": f"{slugify(language)}_{i + 1}",
-                "question": text,
-                "answer": topic.lower(),
-                "hint": f"Think about practical use of {topic} in {language}.",
+                "question": question_text,
+                "answer": answer,
+                "hint": f"Focus on foundational {language} syntax and runtime concepts.",
             }
         )
-    return rows
+    return questions
 
 
 @st.cache_data
 def get_all_questions() -> dict[str, list[dict[str, Any]]]:
-    return {language: generate_question_bank(language, 100) for language in LANGUAGES}
+    return {lang: generate_question_bank(lang, 100) for lang in LANGUAGES}
 
 
-def create_user(conn: sqlite3.Connection, username: str, password: str) -> tuple[bool, str]:
-    exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
-    if exists:
+def create_user(db: firestore.Client, username: str, password: str) -> tuple[bool, str]:
+    user_ref = db.collection("users").document(username)
+    if user_ref.get().exists:
         return False, "Username already exists."
 
-    conn.execute(
-        "INSERT INTO users(username, password_hash, created_at) VALUES (?, ?, ?)",
-        (username, hash_password(password), utc_now()),
+    user_ref.set(
+        {
+            "username": username,
+            "password_hash": hash_password(password),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "progress": {
+                lang: {
+                    "answered": [],
+                    "correct": 0,
+                    "attempted": 0,
+                    "last_question": None,
+                }
+                for lang in LANGUAGES
+            },
+            "special_feature_attempts": [],
+            "notes": {},
+        }
     )
-    conn.commit()
-    ensure_user_language_rows(conn, username)
     return True, "Account created. You can now log in."
 
 
-def authenticate_user(conn: sqlite3.Connection, username: str, password: str) -> bool:
-    row = conn.execute("SELECT password_hash FROM users WHERE username = ?", (username,)).fetchone()
-    return bool(row and row["password_hash"] == hash_password(password))
+def authenticate_user(db: firestore.Client, username: str, password: str) -> bool:
+    doc = db.collection("users").document(username).get()
+    if not doc.exists:
+        return False
+    data = doc.to_dict() or {}
+    return data.get("password_hash") == hash_password(password)
 
 
-def get_user_data(conn: sqlite3.Connection, username: str) -> dict[str, Any]:
-    ensure_user_language_rows(conn, username)
-
-    progress_rows = conn.execute(
-        "SELECT language, answered_json, correct, attempted, last_question FROM progress WHERE username = ?",
-        (username,),
-    ).fetchall()
-    progress = {
-        row["language"]: {
-            "answered": json.loads(row["answered_json"]),
-            "correct": row["correct"],
-            "attempted": row["attempted"],
-            "last_question": row["last_question"],
-        }
-        for row in progress_rows
-    }
-
-    note_rows = conn.execute("SELECT language, content FROM notes WHERE username = ?", (username,)).fetchall()
-    notes = {row["language"]: row["content"] for row in note_rows}
-
-    attempts = conn.execute(
-        "SELECT feature, response, created_at FROM special_feature_attempts WHERE username = ? ORDER BY id DESC LIMIT 20",
-        (username,),
-    ).fetchall()
-
-    return {
-        "progress": progress,
-        "notes": notes,
-        "special_feature_attempts": [dict(row) for row in attempts],
-    }
+def get_user_data(db: firestore.Client, username: str) -> dict[str, Any]:
+    doc = db.collection("users").document(username).get()
+    return doc.to_dict() if doc.exists else {}
 
 
-def update_progress(conn: sqlite3.Connection, username: str, language: str, state: dict[str, Any]):
-    conn.execute(
-        """
-        UPDATE progress
-        SET answered_json = ?, correct = ?, attempted = ?, last_question = ?
-        WHERE username = ? AND language = ?
-        """,
-        (
-            json.dumps(state.get("answered", [])),
-            state.get("correct", 0),
-            state.get("attempted", 0),
-            state.get("last_question"),
-            username,
-            language,
-        ),
-    )
-    conn.commit()
-
-
-def save_special_response(conn: sqlite3.Connection, username: str, feature: str, response: str):
-    conn.execute(
-        "INSERT INTO special_feature_attempts(username, feature, response, created_at) VALUES (?, ?, ?, ?)",
-        (username, feature, response, utc_now()),
-    )
-    conn.commit()
-
-
-def save_note(conn: sqlite3.Connection, username: str, language: str, note: str):
-    conn.execute(
-        "UPDATE notes SET content = ?, updated_at = ? WHERE username = ? AND language = ?",
-        (note, utc_now(), username, language),
-    )
-    conn.commit()
+def save_user_data(db: firestore.Client, username: str, payload: dict[str, Any]):
+    db.collection("users").document(username).set(payload, merge=True)
 
 
 def initialize_session():
@@ -232,21 +163,22 @@ def initialize_session():
     st.session_state.setdefault("username", "")
 
 
-def render_auth(conn: sqlite3.Connection):
+def render_auth(db: firestore.Client):
     st.title("📚 CodeMaster Study Hub")
-    st.caption("Learn 6 coding languages with persistent SQL-backed progress.")
+    st.caption("Master 6 languages with persistent progress stored in Firebase.")
 
     login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
+
     with login_tab:
         username = st.text_input("Username", key="login_username")
         password = st.text_input("Password", type="password", key="login_password")
         if st.button("Login", type="primary"):
-            if authenticate_user(conn, username.strip(), password):
+            if authenticate_user(db, username.strip(), password):
                 st.session_state.logged_in = True
                 st.session_state.username = username.strip()
-                st.success("Logged in successfully.")
+                st.success("Login successful.")
                 st.rerun()
-            st.error("Invalid username or password.")
+            st.error("Invalid credentials.")
 
     with signup_tab:
         username = st.text_input("Create Username", key="signup_username")
@@ -258,7 +190,7 @@ def render_auth(conn: sqlite3.Connection):
             elif password != confirm:
                 st.error("Passwords do not match.")
             else:
-                ok, message = create_user(conn, username.strip(), password)
+                ok, message = create_user(db, username.strip(), password)
                 st.success(message) if ok else st.error(message)
 
 
@@ -266,153 +198,174 @@ def choose_next_question(question_bank: list[dict[str, Any]], answered: set[str]
     remaining = [q for q in question_bank if q["id"] not in answered]
     if not remaining:
         return None
+
     candidates = [q for q in remaining if q["id"] != last_question]
-    return random.choice(candidates if candidates else remaining)
+    pool = candidates if candidates else remaining
+    return random.choice(pool)
 
 
 def render_dashboard(user_data: dict[str, Any]):
     st.subheader("📈 Dashboard")
     progress = user_data.get("progress", {})
+    cols = st.columns(3)
 
     total_attempted = sum(progress.get(lang, {}).get("attempted", 0) for lang in LANGUAGES)
     total_correct = sum(progress.get(lang, {}).get("correct", 0) for lang in LANGUAGES)
     total_questions = len(LANGUAGES) * 100
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Attempted", total_attempted)
-    c2.metric("Total Correct", total_correct)
-    c3.metric("Completion", f"{(total_attempted / total_questions) * 100:.1f}%")
+    cols[0].metric("Total Attempted", total_attempted)
+    cols[1].metric("Total Correct", total_correct)
+    cols[2].metric("Completion", f"{(total_attempted / total_questions) * 100:.1f}%")
 
     for lang in LANGUAGES:
         lang_data = progress.get(lang, {"attempted": 0, "correct": 0})
         attempted = lang_data.get("attempted", 0)
         correct = lang_data.get("correct", 0)
-        acc = (correct / attempted) * 100 if attempted else 0
-        st.progress(min(attempted / 100, 1.0), text=f"{lang}: {attempted}/100 answered | Accuracy {acc:.1f}%")
+        score = (correct / attempted) * 100 if attempted else 0
+        st.progress(min(attempted / 100, 1.0), text=f"{lang}: {attempted}/100 answered | Accuracy {score:.1f}%")
 
 
 def render_cheat_sheets():
     st.subheader("📌 Code Cheat Sheets")
-    sheets = {
-        "Python": ["list/dict/set comprehensions", "functions + decorators", "exceptions + context managers"],
-        "Java": ["classes/interfaces", "collections + streams", "checked vs unchecked exceptions"],
-        "C++": ["RAII + smart pointers", "STL containers", "templates + move semantics"],
-        "JavaScript": ["scope + closures", "promises + async/await", "DOM + event handling"],
-        "Go": ["goroutines + channels", "interfaces", "error handling idioms"],
-        "Rust": ["ownership + borrowing", "traits + enums", "Result/Option + pattern matching"],
+    cheats = {
+        "Python": "Lists, dicts, comprehensions, classes, decorators, context managers.",
+        "Java": "OOP, interfaces, exception handling, collections, streams, JVM memory model.",
+        "C++": "Pointers/references, RAII, STL containers, templates, smart pointers.",
+        "JavaScript": "Closures, async/await, promises, array methods, DOM manipulation.",
+        "Go": "Goroutines/channels, interfaces, error handling, modules, slices/maps.",
+        "Rust": "Ownership, borrowing, lifetimes, traits, enums/match, Result/Option.",
     }
-    for lang, tips in sheets.items():
+    for lang, cheat in cheats.items():
         with st.expander(lang):
-            for tip in tips:
-                st.write(f"- {tip}")
+            st.write(cheat)
 
 
-def render_quiz(conn: sqlite3.Connection, username: str, user_data: dict[str, Any], questions: dict[str, list[dict[str, Any]]]):
+def render_quiz(db: firestore.Client, username: str, user_data: dict[str, Any], questions: dict[str, list[dict[str, Any]]]):
     st.subheader("📝 Adaptive Quiz")
     language = st.selectbox("Choose language", LANGUAGES)
 
-    progress = user_data.get("progress", {})
-    lang_state = progress.get(language, {"answered": [], "correct": 0, "attempted": 0, "last_question": None})
+    progress = user_data.setdefault("progress", {})
+    lang_state = progress.setdefault(language, {"answered": [], "correct": 0, "attempted": 0, "last_question": None})
     answered = set(lang_state.get("answered", []))
 
-    q_key = f"current_question_{language}"
-    if q_key not in st.session_state:
-        st.session_state[q_key] = choose_next_question(questions[language], answered, lang_state.get("last_question"))
+    current_key = f"current_question_{language}"
+    if current_key not in st.session_state:
+        st.session_state[current_key] = choose_next_question(
+            questions[language],
+            answered,
+            lang_state.get("last_question"),
+        )
 
-    q = st.session_state[q_key]
-    if not q:
-        st.success(f"You completed all 100 {language} questions.")
-        if st.button(f"Restart {language} set"):
-            reset_state = {"answered": [], "correct": 0, "attempted": 0, "last_question": None}
-            update_progress(conn, username, language, reset_state)
-            st.session_state.pop(q_key, None)
+    current_q = st.session_state[current_key]
+    if not current_q:
+        st.success(f"You completed all 100 {language} questions. Great job!")
+        if st.button(f"Restart {language} quiz set"):
+            progress[language] = {"answered": [], "correct": 0, "attempted": 0, "last_question": None}
+            save_user_data(db, username, {"progress": progress})
+            st.session_state.pop(current_key, None)
             st.rerun()
         return
 
-    st.write(q["question"])
-    st.caption(f"Hint: {q['hint']}")
-    user_answer = st.text_input("Your answer", key=f"ans_{language}_{q['id']}")
+    st.write(current_q["question"])
+    st.caption(f"Hint: {current_q['hint']}")
+    answer = st.text_input("Your answer", key=f"ans_{language}_{current_q['id']}")
 
-    if st.button("Submit Answer", key=f"submit_{language}"):
-        correct = q["answer"] in user_answer.strip().lower()
-        st.success("Correct ✅") if correct else st.error(f"Expected concept: {q['answer']}")
+    if st.button("Submit answer", key=f"submit_{language}"):
+        is_correct = current_q["answer"].lower() in answer.strip().lower()
+        st.success("Correct ✅") if is_correct else st.error(f"Not quite. Expected concept: {current_q['answer']}")
 
-        new_state = {
-            "answered": list(answered | {q["id"]}),
-            "correct": lang_state.get("correct", 0) + (1 if correct else 0),
-            "attempted": lang_state.get("attempted", 0) + 1,
-            "last_question": q["id"],
-        }
-        update_progress(conn, username, language, new_state)
-        st.session_state.pop(q_key, None)
+        lang_state["attempted"] = lang_state.get("attempted", 0) + 1
+        if is_correct:
+            lang_state["correct"] = lang_state.get("correct", 0) + 1
+        lang_state["answered"] = list(answered | {current_q["id"]})
+        lang_state["last_question"] = current_q["id"]
+        progress[language] = lang_state
+
+        save_user_data(db, username, {"progress": progress})
+
+        st.session_state.pop(current_key, None)
         st.rerun()
 
 
-def render_special_features(conn: sqlite3.Connection, username: str, user_data: dict[str, Any]):
+def render_special_features(db: firestore.Client, username: str, user_data: dict[str, Any]):
     st.subheader("✨ Special Features")
     feature = st.selectbox("Pick a special mode", SPECIAL_FEATURES)
-    prompts = {
-        "Daily Challenge": "Share one performance improvement trick.",
-        "Debug Sprint": "Describe a bug and how you fixed it.",
-        "Interview Prep": "Explain polymorphism in simple terms.",
-        "Speed Round": "Write one best practice for clean code.",
+
+    prompt_map = {
+        "Daily Challenge": "Explain one optimization technique you used recently.",
+        "Debug Sprint": "Share a bug scenario and your fix strategy.",
+        "Interview Prep": "How would you explain polymorphism to a beginner?",
+        "Speed Round": "Write one tip for writing cleaner functions.",
     }
 
-    response = st.text_area("Your response", placeholder=prompts[feature], height=130)
-    if st.button("Save Response"):
-        if response.strip():
-            save_special_response(conn, username, feature, response.strip())
-            st.success("Response saved to your profile.")
-        else:
-            st.warning("Please enter a response first.")
+    response = st.text_area("Your response", placeholder=prompt_map[feature], height=130)
+    if st.button("Save special feature response"):
+        attempts = user_data.get("special_feature_attempts", [])
+        attempts.append(
+            {
+                "feature": feature,
+                "response": response,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        save_user_data(db, username, {"special_feature_attempts": attempts})
+        st.success("Saved. Your interactive response is now part of your learning record.")
 
     st.markdown("#### Personal Notes")
-    note_lang = st.selectbox("Language for notes", LANGUAGES, key="note_lang")
-    existing = (user_data.get("notes", {}) or {}).get(note_lang, "")
-    note_value = st.text_area("Write your notes", value=existing, key="notes_input")
-    if st.button("Save Notes"):
-        save_note(conn, username, note_lang, note_value)
+    selected_lang = st.selectbox("Language for notes", LANGUAGES, key="note_lang")
+    existing_notes = (user_data.get("notes", {}) or {}).get(selected_lang, "")
+    notes = st.text_area("Write your notes", value=existing_notes, key="notes_input")
+    if st.button("Save notes"):
+        all_notes = user_data.get("notes", {})
+        all_notes[selected_lang] = notes
+        save_user_data(db, username, {"notes": all_notes})
         st.success("Notes saved.")
 
-    st.markdown("#### Recent Special Responses")
-    for row in user_data.get("special_feature_attempts", [])[:5]:
-        with st.expander(f"{row['feature']} • {row['created_at'][:19]}"):
-            st.write(row["response"])
 
-
-def render_app(conn: sqlite3.Connection):
+def render_app(db: firestore.Client):
     username = st.session_state.username
-    user_data = get_user_data(conn, username)
-    all_questions = get_all_questions()
+    user_data = get_user_data(db, username)
+    questions = get_all_questions()
 
     st.title("📚 CodeMaster Study Hub")
     st.success(f"Welcome, {username}")
-    st.caption("Your progress is stored in SQL and remains after you leave and come back.")
+    st.caption("Progress is saved in Firebase and remains available when you leave and come back.")
 
     if st.button("Logout"):
         st.session_state.logged_in = False
         st.session_state.username = ""
         st.rerun()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Quiz", "Cheat Sheets", "Special Features"])
-    with tab1:
+    dashboard_tab, quiz_tab, cheats_tab, special_tab = st.tabs(
+        ["Dashboard", "Quiz", "Cheat Sheets", "Special Features"]
+    )
+
+    with dashboard_tab:
         render_dashboard(user_data)
-    with tab2:
-        render_quiz(conn, username, user_data, all_questions)
-    with tab3:
+
+    with quiz_tab:
+        render_quiz(db, username, user_data, questions)
+
+    with cheats_tab:
         render_cheat_sheets()
-    with tab4:
-        render_special_features(conn, username, user_data)
+
+    with special_tab:
+        render_special_features(db, username, user_data)
 
 
 def main():
     initialize_session()
-    with closing(get_connection()) as conn:
-        init_db(conn)
-        if not st.session_state.logged_in:
-            render_auth(conn)
-            st.stop()
-        render_app(conn)
+    try:
+        db = init_firebase()
+    except Exception as exc:
+        st.error(f"Firebase initialization failed. Add valid firebase secrets to run the app: {exc}")
+        st.stop()
+
+    if not st.session_state.logged_in:
+        render_auth(db)
+        st.stop()
+
+    render_app(db)
 
 
 if __name__ == "__main__":

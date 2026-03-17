@@ -350,68 +350,179 @@ else:
 # ELABORATED CHEAT SHEETS
 # ==============================
 
-st.header("📘 Detailed Cheat Sheets")
+# ==============================
+# ELABORATED CHEAT SHEETS (FULL CODE FORMAT)
+# ==============================
+
+st.header("📘 Advanced Cheat Sheets")
 
 cheats = {
+
 "Python": """
-• Syntax: Indentation-based
-• Variables: Dynamic typing
-• Data Structures: list, tuple, dict, set
-• OOP: class, inheritance, polymorphism
-• Advanced: decorators, generators, async/await
-• Libraries: pandas, numpy, flask, django
+PYTHON OVERVIEW:
+Python is a high-level, interpreted programming language designed for readability and simplicity. It supports multiple programming paradigms including procedural, object-oriented, and functional programming.
+
+It uses indentation to define code blocks instead of braces. Python has dynamic typing and automatic memory management through garbage collection.
+
+CORE FEATURES:
+- Easy syntax
+- Large standard library
+- Cross-platform
+- Strong community support
+
+EXAMPLE:
+def greet(name):
+    return "Hello " + name
+
+print(greet("World"))
+
+OBJECT-ORIENTED PROGRAMMING:
+Python supports classes, inheritance, encapsulation, and polymorphism.
+
+ADVANCED TOPICS:
+- Decorators
+- Generators (yield)
+- Async programming
+- Multithreading
+- Multiprocessing
 """,
 
 "Java": """
-• Object-Oriented Language
-• JVM-based execution
-• Core: classes, objects
-• Inheritance & interfaces
-• Collections framework
-• Multithreading
-• Garbage collection
+JAVA OVERVIEW:
+Java is a strongly typed, object-oriented language that runs on the Java Virtual Machine (JVM). It follows the principle of "Write Once, Run Anywhere".
+
+Java compiles source code into bytecode, which can run on any system with a JVM installed.
+
+CORE FEATURES:
+- Platform independence
+- Garbage collection
+- Strict OOP structure
+- Strong type system
+
+EXAMPLE:
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello World");
+    }
+}
+
+ADVANCED TOPICS:
+- Streams API
+- Lambda expressions
+- Generics
+- Multithreading
+- Exception handling
 """,
 
 "C++": """
-• Compiled language
-• Manual memory control
-• Pointers & references
-• STL containers
-• RAII principle
-• Templates & generics
+C++ OVERVIEW:
+C++ is a high-performance compiled language that supports procedural, object-oriented, and generic programming. It provides low-level memory control.
+
+It is commonly used in systems programming, game development, and performance-critical applications.
+
+CORE FEATURES:
+- Manual memory management
+- Pointers and references
+- Classes and inheritance
+- Templates
+
+EXAMPLE:
+#include <iostream>
+using namespace std;
+
+int main() {
+    cout << "Hello World";
+    return 0;
+}
+
+ADVANCED TOPICS:
+- Smart pointers
+- Move semantics
+- STL (Standard Template Library)
+- Multithreading
 """,
 
 "JavaScript": """
-• Runs in browser & Node.js
-• DOM manipulation
-• Event-driven
-• Async programming
-• Promises & async/await
-• ES6 modules
+JAVASCRIPT OVERVIEW:
+JavaScript is a dynamic scripting language mainly used for web development. It runs in browsers and also on servers using Node.js.
+
+It is event-driven and supports asynchronous programming.
+
+CORE FEATURES:
+- DOM manipulation
+- Prototype-based objects
+- Event loop
+- Dynamic typing
+
+EXAMPLE:
+function greet(name) {
+    return "Hello " + name;
+}
+
+console.log(greet("World"));
+
+MODERN FEATURES:
+- Arrow functions
+- Promises
+- async/await
+- Modules
+- Destructuring
 """,
 
 "Go": """
-• Simple syntax
-• High performance
-• Goroutines
-• Channels
-• Built-in concurrency
-• Fast compilation
+GO OVERVIEW:
+Go (Golang) is a compiled language designed for simplicity and concurrency. It was developed for scalable backend systems.
+
+It includes built-in support for concurrency using goroutines.
+
+CORE FEATURES:
+- Static typing
+- Fast compilation
+- Simple syntax
+- Garbage collection
+
+EXAMPLE:
+package main
+import "fmt"
+
+func main() {
+    fmt.Println("Hello World")
+}
+
+CONCURRENCY:
+- Goroutines
+- Channels
 """,
 
 "Rust": """
-• Memory safety without GC
-• Ownership system
-• Borrowing & lifetimes
-• Pattern matching
-• Traits
-• High performance
+RUST OVERVIEW:
+Rust is a systems programming language focused on memory safety without using a garbage collector.
+
+It uses an ownership system to prevent memory errors at compile time.
+
+CORE FEATURES:
+- Ownership model
+- Borrowing rules
+- Zero-cost abstractions
+- High performance
+
+EXAMPLE:
+fn main() {
+    println!("Hello World");
+}
+
+ADVANCED TOPICS:
+- Pattern matching
+- Traits
+- Enums
+- Result and Option types
+- Safe concurrency
 """
 }
 
 for lang, content in cheats.items():
     with st.expander(lang):
-        st.markdown(content)
+        st.code(content)
 
 # ==============================
 # LOGOUT

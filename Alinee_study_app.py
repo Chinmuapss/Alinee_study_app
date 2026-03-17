@@ -102,17 +102,6 @@ QUESTION_DIMENSIONS = [
 
 
 
-def get_firebase_secrets() -> dict[str, Any] | None:
-    try:
-        return st.secrets.get("firebase")
-    except StreamlitSecretNotFoundError:
-        return None
-
-
-def firebase_ready() -> bool:
-    return st.session_state.get("firebase_enabled", False)
-
-
 def initialize_firebase() -> None:
     if "firebase_enabled" in st.session_state:
         return
@@ -122,6 +111,10 @@ def initialize_firebase() -> None:
 
     config = get_firebase_secrets()
     if not config:
+        return
+
+    if "web_api_key" not in config:
+        st.warning("Firebase web_api_key missing in secrets.")
         return
 
     try:

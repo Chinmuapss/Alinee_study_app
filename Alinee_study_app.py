@@ -2,12 +2,14 @@
 import random
 import urllib.error
 import urllib.request
+import json
 from datetime import date
 from typing import Any
 
 import firebase_admin
 import streamlit as st
 from firebase_admin import credentials, firestore
+from streamlit.errors import StreamlitSecretNotFoundError
 
 st.set_page_config(page_title="ALINEE Study App", page_icon="📚", layout="wide")
 
@@ -98,6 +100,15 @@ QUESTION_DIMENSIONS = [
 ]
 
 
+
+
+def get_firebase_secrets() -> dict[str, Any] | None:
+    try:
+        return st.secrets.get("firebase")
+    except StreamlitSecretNotFoundError:
+        return None
+
+
 def firebase_ready() -> bool:
     return st.session_state.get("firebase_enabled", False)
 
@@ -109,7 +120,7 @@ def initialize_firebase() -> None:
     st.session_state.firebase_enabled = False
     st.session_state.firestore_client = None
 
-    config = st.secrets.get("firebase") if "firebase" in st.secrets else None
+    config = get_firebase_secrets()
     if not config:
         return
 
@@ -124,7 +135,8 @@ def initialize_firebase() -> None:
 
 
 def identity_request(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
-    api_key = st.secrets.get("firebase", {}).get("web_api_key")
+    firebase_config = get_firebase_secrets() or {}
+    api_key = firebase_config.get("web_api_key")
     if not api_key:
         raise RuntimeError("Missing firebase.web_api_key in Streamlit secrets.")
 
@@ -357,51 +369,6 @@ def auth_panel() -> None:
             st.sidebar.error(str(exc))
 
 
-def dashboard() -> None:
-    st.title("📊 Dashboard")
-    total_attempted = sum(st.session_state.progress[l]["attempted"] for l in LANGUAGES)
-    total_correct = sum(st.session_state.progress[l]["correct"] for l in LANGUAGES)
-    completion = int((total_attempted / (len(LANGUAGES) * 100)) * 100)
-    accuracy = int((total_correct / total_attempted) * 100) if total_attempted else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Languages", len(LANGUAGES))
-    c2.metric("Attempted", total_attempted)
-    c3.metric("Accuracy", f"{accuracy}%")
-    c4.metric("Completion", f"{completion}%")
-
-    st.progress(completion, text="Global learning completion")
-    st.info("Dashboard = global snapshot. Use Progress Tracker for per-language deep analytics.")
-
-
-def progress_tracker() -> None:
-    st.title("📈 Progress Tracker")
-    st.write("Detailed language progress board with independent score lines and sync-aware status.")
-
-    rows = []
-    for lang in LANGUAGES:
-        attempted = st.session_state.progress[lang]["attempted"]
-        correct = st.session_state.progress[lang]["correct"]
-        rows.append({
-            "Language": lang,
-            "Attempted": attempted,
-            "Correct": correct,
-            "Accuracy %": int((correct / attempted) * 100) if attempted else 0,
-            "Remaining": len(st.session_state.progress[lang]["remaining"]),
-        })
-    st.dataframe(rows, use_container_width=True)
-
-    for row in rows:
-        st.markdown(f"**{row['Language']}**")
-        st.progress(int((row["Attempted"] / 100) * 100), text=f"{row['Attempted']}/100 questions completed")
-
-    if st.session_state.user:
-        st.success("Scores can be persisted to Firebase and displayed in this board.")
-        if st.button("Sync now to Firebase"):
-            sync_progress_to_firebase()
-            st.success("Progress synced.")
-
-
 def quizzes() -> None:
     st.title("🧠 Situational Quizzes (100 per Language)")
     lang = st.selectbox("Choose a technology", LANGUAGES)
@@ -447,7 +414,7 @@ def cheat_sheets() -> None:
 
 def special_features() -> None:
     st.title("✨ Special Features")
-    tab1, tab2 = st.tabs(["🎯 Adaptive Daily Marathon", "⚡ Interview Mode"])
+    tab1, tab2, tab3 = st.tabs(["🎯 Adaptive Daily Marathon", "⚡ Interview Mode", "🏆 Score Board"])
 
     with tab1:
         st.write("Mixed-language challenge where each item is consumed once with no repeats.")
@@ -480,6 +447,28 @@ def special_features() -> None:
             else:
                 st.warning(f"Expected idea: {LANGUAGE_FACTS[lang][field]}")
 
+    with tab3:
+        st.write("Live score board of your language progress. Firebase users can sync scores anytime.")
+        rows = []
+        for lang in LANGUAGES:
+            attempted = st.session_state.progress[lang]["attempted"]
+            correct = st.session_state.progress[lang]["correct"]
+            rows.append({
+                "Language": lang,
+                "Attempted": attempted,
+                "Correct": correct,
+                "Accuracy %": int((correct / attempted) * 100) if attempted else 0,
+                "Remaining": len(st.session_state.progress[lang]["remaining"]),
+            })
+        st.dataframe(rows, use_container_width=True)
+
+        if st.session_state.user and firebase_ready():
+            if st.button("Sync scores to Firebase"):
+                sync_progress_to_firebase()
+                st.success("Scores synced to Firebase.")
+        elif st.session_state.user:
+            st.info("Login detected, but Firebase is not configured in Streamlit secrets.")
+
 
 def main() -> None:
     init_state()
@@ -490,7 +479,7 @@ def main() -> None:
     if not firebase_ready():
         st.sidebar.warning("Firebase config missing. App runs locally; cloud sync is disabled.")
 
-    page = st.sidebar.radio("Navigate", ["Dashboard", "Progress Tracker", "Cheat Sheets", "Quizzes", "Special Features"])
+    page = st.sidebar.radio("Navigate", ["Cheat Sheets", "Quizzes", "Special Features"])
 
     st.sidebar.markdown("---")
     if st.sidebar.button("Reset all progress"):
@@ -509,11 +498,7 @@ def main() -> None:
             sync_progress_to_firebase()
         st.rerun()
 
-    if page == "Dashboard":
-        dashboard()
-    elif page == "Progress Tracker":
-        progress_tracker()
-    elif page == "Cheat Sheets":
+    if page == "Cheat Sheets":
         cheat_sheets()
     elif page == "Quizzes":
         quizzes()

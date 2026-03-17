@@ -115,21 +115,25 @@ def save_audio_record(user: str, title: str, original_filename: str, audio_bytes
             "original_filename": original_filename,
             "transcript": transcript,
             "translation": translation,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.utcnow(),  # ✅ FIXED
             "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
             "edits": edits,
         }
     )
 
-
 def get_user_audio_records(user: str) -> list[dict]:
-    docs = (
-        db.collection("jounacord_audio")
-        .where("user", "==", user)
-        .order_by("created_at", direction=firestore.Query.DESCENDING)
-        .stream()
-    )
-    return [doc.to_dict() for doc in docs]
+    try:
+        docs = (
+            db.collection("jounacord_audio")
+            .where("user", "==", user)
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .stream()
+        )
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        import traceback
+        st.error(f"Firestore error:\n{traceback.format_exc()}")
+        return []
 
 
 if "logged_in" not in st.session_state:

@@ -1,6 +1,6 @@
+import sqlite3
 import hashlib
 import random
-import sqlite3
 from datetime import datetime, timezone, date
 
 import streamlit as st
@@ -15,14 +15,13 @@ DB_NAME = "codemaster.db"
 LANGUAGES = ["Python", "Java", "C++", "JavaScript", "Go", "Rust"]
 
 # ==============================
-# DATABASE
+# DATABASE SETUP
 # ==============================
 
 def get_db():
     conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def init_db():
     conn = get_db()
@@ -32,7 +31,6 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         username TEXT PRIMARY KEY,
         password_hash TEXT,
-        created_at TEXT,
         streak INTEGER DEFAULT 0,
         last_login TEXT
     )
@@ -42,57 +40,38 @@ def init_db():
     CREATE TABLE IF NOT EXISTS progress (
         username TEXT,
         language TEXT,
-        answered TEXT,
-        correct INTEGER,
-        attempted INTEGER,
-        last_question TEXT
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS notes (
-        username TEXT,
-        language TEXT,
-        content TEXT
+        correct INTEGER DEFAULT 0,
+        attempted INTEGER DEFAULT 0
     )
     """)
 
     conn.commit()
     conn.close()
 
-
 init_db()
 
 # ==============================
-# UTILITIES
+# HELPERS
 # ==============================
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-
 def calculate_xp(correct, attempted):
-    if attempted == 0:
-        return 0
-    accuracy = correct / attempted
-    base = correct * 10
-    bonus = 100 if accuracy >= 0.9 else 50 if accuracy >= 0.75 else 20
-    return base + bonus
-
+    return correct * 10
 
 def get_rank(xp):
-    if xp < 200:
+    if xp < 100:
         return "🥉 Beginner"
-    elif xp < 500:
+    elif xp < 300:
         return "🥈 Intermediate"
-    elif xp < 1000:
+    elif xp < 600:
         return "🥇 Advanced"
     else:
         return "💎 Code Master"
 
-
 # ==============================
-# AUTH FUNCTIONS
+# USER FUNCTIONS
 # ==============================
 
 def create_user(username, password):
@@ -101,23 +80,22 @@ def create_user(username, password):
 
     try:
         cursor.execute(
-            "INSERT INTO users VALUES (?, ?, ?, 0, NULL)",
-            (username, hash_password(password),
-             datetime.now(timezone.utc).isoformat())
+            "INSERT INTO users VALUES (?, ?, 0, NULL)",
+            (username, hash_password(password))
         )
 
         for lang in LANGUAGES:
-            cursor.execute("""
-            INSERT INTO progress VALUES (?, ?, '', 0, 0, NULL)
-            """, (username, lang))
+            cursor.execute(
+                "INSERT INTO progress VALUES (?, ?, 0, 0)",
+                (username, lang)
+            )
 
         conn.commit()
-        return True, "Account created!"
+        return True
     except:
-        return False, "Username already exists."
+        return False
     finally:
         conn.close()
-
 
 def authenticate(username, password):
     conn = get_db()
@@ -132,18 +110,18 @@ def authenticate(username, password):
 
     return user["password_hash"] == hash_password(password)
 
-
 def update_streak(username):
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT streak, last_login FROM users WHERE username=?", (username,))
+    cursor.execute("SELECT * FROM users WHERE username=?", (username,))
     user = cursor.fetchone()
 
     today = date.today()
 
-    if user["last_login"]:
+    if user and user["last_login"]:
         last = datetime.fromisoformat(user["last_login"]).date()
+
         if (today - last).days == 1:
             streak = user["streak"] + 1
         elif (today - last).days > 1:
@@ -162,47 +140,40 @@ def update_streak(username):
     conn.commit()
     conn.close()
 
-
 # ==============================
 # TECH QUESTIONS
 # ==============================
 
-def generate_question(language):
+def get_question(language):
+
     questions = {
         "Python": [
             ("What keyword defines a function?", "def"),
             ("What structure stores key-value pairs?", "dictionary"),
-            ("What is used for loops?", "for"),
         ],
         "Java": [
             ("What keyword creates an object?", "new"),
             ("What starts a Java program?", "main"),
-            ("What does JVM stand for?", "java virtual machine"),
         ],
         "C++": [
             ("What operator allocates memory?", "new"),
-            ("What is used for scope resolution?", "::"),
-            ("What is STL?", "standard template library"),
+            ("What symbol is used for scope resolution?", "::"),
         ],
         "JavaScript": [
             ("Which keyword declares block variable?", "let"),
             ("What handles async operations?", "promise"),
-            ("What does DOM stand for?", "document object model"),
         ],
         "Go": [
             ("What starts a goroutine?", "go"),
-            ("What initializes modules?", "go mod"),
             ("What is used for concurrency?", "channel"),
         ],
         "Rust": [
             ("What ensures memory safety?", "ownership"),
             ("Which macro prints text?", "println"),
-            ("What handles recoverable errors?", "result"),
         ],
     }
 
     return random.choice(questions[language])
-
 
 # ==============================
 # SESSION STATE
@@ -212,9 +183,8 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = ""
 
-
 # ==============================
-# AUTH UI
+# LOGIN PAGE
 # ==============================
 
 if not st.session_state.logged_in:
@@ -245,20 +215,16 @@ if not st.session_state.logged_in:
             if new_pass != confirm:
                 st.error("Passwords do not match.")
             else:
-                success, msg = create_user(new_user, new_pass)
-                if success:
-                    st.success(msg)
+                if create_user(new_user, new_pass):
+                    st.success("Account created!")
                 else:
-                    st.error(msg)
+                    st.error("Username already exists.")
 
     st.stop()
 
-
 # ==============================
-# DASHBOARD
+# LOAD USER SAFELY
 # ==============================
-
-st.sidebar.title("📊 Dashboard")
 
 conn = get_db()
 cursor = conn.cursor()
@@ -267,35 +233,45 @@ cursor.execute("SELECT * FROM users WHERE username=?",
                (st.session_state.username,))
 user = cursor.fetchone()
 
+if user is None:
+    st.error("User not found. Please login again.")
+    st.session_state.logged_in = False
+    st.stop()
+
+# ==============================
+# SIDEBAR INFO
+# ==============================
+
 cursor.execute("SELECT * FROM progress WHERE username=?",
                (st.session_state.username,))
-progress_rows = cursor.fetchall()
+progress = cursor.fetchall()
 
-total_attempted = sum(r["attempted"] for r in progress_rows)
-total_correct = sum(r["correct"] for r in progress_rows)
+total_correct = sum(p["correct"] for p in progress)
+total_attempted = sum(p["attempted"] for p in progress)
 
 xp = calculate_xp(total_correct, total_attempted)
 
+st.sidebar.title("📊 Stats")
 st.sidebar.metric("XP", xp)
 st.sidebar.write("Rank:", get_rank(xp))
 st.sidebar.write("🔥 Streak:", user["streak"])
 
-
 # ==============================
-# QUIZ SECTION
+# QUIZ
 # ==============================
 
 st.header("🧠 Tech Quiz")
 
 language = st.selectbox("Choose Language", LANGUAGES)
 
-question, answer = generate_question(language)
+question, answer = get_question(language)
 
 st.write("###", question)
 
 user_answer = st.text_input("Your Answer")
 
-if st.button("Submit"):
+if st.button("Submit Answer"):
+
     cursor.execute("""
     SELECT * FROM progress
     WHERE username=? AND language=?
@@ -303,25 +279,24 @@ if st.button("Submit"):
 
     row = cursor.fetchone()
 
-    attempted = row["attempted"] + 1
     correct = row["correct"]
+    attempted = row["attempted"] + 1
 
     if user_answer.lower().strip() == answer.lower():
         correct += 1
         st.success("Correct ✅")
     else:
-        st.error(f"Wrong ❌ (Answer: {answer})")
+        st.error(f"Wrong ❌ Answer: {answer}")
 
     cursor.execute("""
     UPDATE progress
-    SET attempted=?, correct=?
+    SET correct=?, attempted=?
     WHERE username=? AND language=?
-    """, (attempted, correct,
+    """, (correct, attempted,
           st.session_state.username, language))
 
     conn.commit()
     st.rerun()
-
 
 # ==============================
 # CHEAT SHEETS
@@ -330,40 +305,17 @@ if st.button("Submit"):
 st.header("📌 Cheat Sheets")
 
 cheats = {
-    "Python": "Functions, lists, dicts, classes, exceptions, imports.",
-    "Java": "OOP, JVM, inheritance, interfaces, collections.",
-    "C++": "Pointers, RAII, STL, memory control.",
-    "JavaScript": "DOM, async/await, promises, events.",
-    "Go": "Goroutines, channels, modules.",
-    "Rust": "Ownership, borrowing, lifetimes, match."
+    "Python": "def, lists, dicts, classes, try/except",
+    "Java": "OOP, JVM, new, extends, interfaces",
+    "C++": "Pointers, STL, new/delete, ::",
+    "JavaScript": "DOM, let, async/await, promises",
+    "Go": "Goroutines, channels, modules",
+    "Rust": "Ownership, borrowing, match, lifetimes"
 }
 
 for lang, content in cheats.items():
     with st.expander(lang):
         st.write(content)
-
-
-# ==============================
-# NOTES
-# ==============================
-
-st.header("📝 Notes")
-
-note = st.text_area("Write notes for this language:")
-
-if st.button("Save Notes"):
-    cursor.execute("""
-    DELETE FROM notes
-    WHERE username=? AND language=?
-    """, (st.session_state.username, language))
-
-    cursor.execute("""
-    INSERT INTO notes VALUES (?, ?, ?)
-    """, (st.session_state.username, language, note))
-
-    conn.commit()
-    st.success("Saved!")
-
 
 # ==============================
 # LOGOUT

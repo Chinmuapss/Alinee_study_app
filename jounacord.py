@@ -9,10 +9,11 @@ import streamlit as st
 # CONFIG
 # ==============================
 
-st.set_page_config(page_title="CodeMaster Pro", layout="wide")
+st.set_page_config(page_title="AgriGuard Region 12", layout="wide")
 
 DB_NAME = "codemaster.db"
 LANGUAGES = ["Python", "Java", "C++", "JavaScript", "Go", "Rust"]
+CROPS = ["Rice", "Corn", "Banana", "Cacao", "Tomato", "Eggplant"]
 
 # ==============================
 # DATABASE
@@ -73,6 +74,51 @@ def get_rank(xp):
         return "🥇 Advanced"
     else:
         return "💎 Code Master"
+
+
+def disease_risk_assessment(crop, humidity, temperature_c):
+    disease_rules = {
+        "Rice": [("Blast", humidity >= 85 and 24 <= temperature_c <= 30)],
+        "Corn": [("Leaf Blight", humidity >= 80 and 20 <= temperature_c <= 28)],
+        "Banana": [("Sigatoka", humidity >= 85 and 25 <= temperature_c <= 31)],
+        "Cacao": [("Black Pod Rot", humidity >= 82 and 22 <= temperature_c <= 30)],
+        "Tomato": [("Early Blight", humidity >= 78 and 22 <= temperature_c <= 30)],
+        "Eggplant": [("Bacterial Wilt", humidity >= 75 and 26 <= temperature_c <= 34)],
+    }
+
+    matched = []
+    for disease, triggered in disease_rules.get(crop, []):
+        if triggered:
+            matched.append(disease)
+    return matched
+
+
+def pest_outbreak_signal(crop, humidity, temperature_c):
+    pest_rules = {
+        "Rice": ("Brown Planthopper", humidity >= 82 and 27 <= temperature_c <= 33),
+        "Corn": ("Fall Armyworm", humidity >= 70 and 24 <= temperature_c <= 32),
+        "Banana": ("Banana Aphid", humidity >= 75 and 26 <= temperature_c <= 34),
+        "Cacao": ("Cacao Pod Borer", humidity >= 74 and 23 <= temperature_c <= 32),
+        "Tomato": ("Fruit Borer", humidity >= 68 and 24 <= temperature_c <= 33),
+        "Eggplant": ("Leafhopper", humidity >= 65 and 25 <= temperature_c <= 35),
+    }
+    pest, triggered = pest_rules.get(crop, ("Unknown Pest", False))
+    return pest, triggered
+
+
+def crop_suitability(crop, humidity, temperature_c):
+    ranges = {
+        "Rice": {"humidity": (70, 90), "temp": (22, 35)},
+        "Corn": {"humidity": (60, 80), "temp": (18, 32)},
+        "Banana": {"humidity": (75, 95), "temp": (24, 34)},
+        "Cacao": {"humidity": (70, 90), "temp": (21, 32)},
+        "Tomato": {"humidity": (55, 75), "temp": (18, 30)},
+        "Eggplant": {"humidity": (55, 80), "temp": (20, 34)},
+    }
+    selected = ranges[crop]
+    humidity_ok = selected["humidity"][0] <= humidity <= selected["humidity"][1]
+    temp_ok = selected["temp"][0] <= temperature_c <= selected["temp"][1]
+    return humidity_ok and temp_ok, selected
 
 # ==============================
 # USER SYSTEM
@@ -219,7 +265,7 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
 
-    st.title("📚 CodeMaster Pro")
+    st.title("🌾 AgriGuard Region 12")
 
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
 
@@ -281,6 +327,83 @@ st.sidebar.title("📊 Stats")
 st.sidebar.metric("XP", xp)
 st.sidebar.write("Rank:", get_rank(xp))
 st.sidebar.write("🔥 Streak:", user["streak"])
+
+# ==============================
+# REGION 12 CROP HEALTH MODULE
+# ==============================
+st.header("🌱 Region 12 Crop Health Assistant")
+st.caption(
+    "Built for farms in SOCCSKSARGEN (Region XII): Cotabato, South Cotabato, "
+    "Sultan Kudarat, Sarangani, and General Santos City."
+)
+
+mode = st.radio(
+    "Operating Mode",
+    ["Offline Field Mode", "Weather-Linked Mode"],
+    horizontal=True
+)
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    selected_crop = st.selectbox("Crop", CROPS)
+with col2:
+    barangay = st.text_input("Barangay / Farm Name", "Sample Farm")
+with col3:
+    municipality = st.text_input("City / Municipality (Region 12)", "Koronadal")
+
+if mode == "Weather-Linked Mode":
+    st.info(
+        "Weather-linked mode is ready for API integration. "
+        "If signal is weak, switch to Offline Field Mode."
+    )
+
+if mode == "Offline Field Mode":
+    st.success("Offline mode active: manual sensor/input values are used.")
+else:
+    st.warning("Limited internet in rural areas can affect live weather syncing.")
+
+left, right = st.columns(2)
+with left:
+    humidity = st.slider("Air Humidity (%)", min_value=30, max_value=100, value=78)
+with right:
+    temperature = st.slider("Temperature (°C)", min_value=10, max_value=45, value=29)
+
+if st.button("Run Crop Health Scan"):
+    diseases = disease_risk_assessment(selected_crop, humidity, temperature)
+    pest_name, pest_alert = pest_outbreak_signal(selected_crop, humidity, temperature)
+    suitable, ranges = crop_suitability(selected_crop, humidity, temperature)
+
+    st.subheader("📍 Assessment Result")
+    st.write(f"Farm: **{barangay}, {municipality}, Region 12**")
+    st.write(f"Crop: **{selected_crop}**")
+
+    if suitable:
+        st.success(
+            f"Climate is suitable for {selected_crop}. "
+            f"Target humidity: {ranges['humidity'][0]}-{ranges['humidity'][1]}%, "
+            f"temperature: {ranges['temp'][0]}-{ranges['temp'][1]}°C."
+        )
+    else:
+        st.error(
+            f"Climate is outside recommended range for {selected_crop}. "
+            f"Target humidity: {ranges['humidity'][0]}-{ranges['humidity'][1]}%, "
+            f"temperature: {ranges['temp'][0]}-{ranges['temp'][1]}°C."
+        )
+
+    if diseases:
+        st.warning(
+            "Possible early disease risk detected: " + ", ".join(diseases) + "."
+        )
+    else:
+        st.info("No high disease signal detected from current values.")
+
+    if pest_alert:
+        st.error(
+            f"Pest outbreak trigger: {pest_name}. "
+            "Recommend immediate field scouting and threshold-based intervention."
+        )
+    else:
+        st.success(f"No outbreak trigger detected for {pest_name}.")
 
 # ==============================
 # QUIZ (NO REPEATS)

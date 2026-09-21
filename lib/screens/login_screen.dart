@@ -1,0 +1,11 @@
+import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
+import '../utils/constants.dart';
+import '../utils/validators.dart';
+import 'register_screen.dart';
+class LoginScreen extends StatefulWidget { const LoginScreen({super.key}); @override State<LoginScreen> createState() => _LoginScreenState(); }
+class _LoginScreenState extends State<LoginScreen> {
+  final form = GlobalKey<FormState>(); final email = TextEditingController(), password = TextEditingController(); bool busy = false;
+  Future<void> login() async { if (!form.currentState!.validate()) return; setState(() => busy = true); try { await AuthService().signIn(email.text.trim(), password.text); } catch (_) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unable to sign in. Check your email and password, then try again.'))); } finally { if (mounted) setState(() => busy = false); } }
+  @override Widget build(BuildContext context) => Scaffold(body: SafeArea(child: Center(child: SingleChildScrollView(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: Padding(padding: const EdgeInsets.all(24), child: Form(key: form, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [const Icon(Icons.shield_outlined, size: 72, color: emergencyRed), const SizedBox(height: 16), Text(appName, textAlign: TextAlign.center, style: Theme.of(context).textTheme.displaySmall?.copyWith(fontWeight: FontWeight.bold)), const Text(appSubtitle, textAlign: TextAlign.center), const SizedBox(height: 32), TextFormField(controller: email, keyboardType: TextInputType.emailAddress, validator: emailValidator, decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder())), const SizedBox(height: 14), TextFormField(controller: password, obscureText: true, validator: passwordValidator, decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder())), const SizedBox(height: 20), FilledButton(onPressed: busy ? null : login, child: Text(busy ? 'Signing in…' : 'LOGIN')), TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterScreen())), child: const Text('Create an account'))])))))));
+}
